@@ -46,7 +46,7 @@ This project focuses on:
 ---
 
 ## Architecture
-
+```
 ┌──────────────┐
 │ Gmail Inbox │
 │ (DOM) │
@@ -76,7 +76,7 @@ This project focuses on:
 │ - Centroids │
 │ - Sender history │
 └─────────────────────┘
-
+````
 ---
 
 ## Machine Learning Approach
@@ -110,7 +110,7 @@ This project focuses on:
 ---
 
 ## Project Structure
-
+```
 auto-email-labeler/
 ├── background.js # Model state & persistence
 ├── content_script.js # Gmail DOM logic & inference
@@ -120,7 +120,7 @@ auto-email-labeler/
 ├── styles.css # Badge & UI styles
 ├── icons/ # Extension icons
 └── LICENSE # MIT License
-
+```
 ---
 
 ## Steps to Implement
@@ -131,27 +131,27 @@ git clone https://github.com/codeswa1/auto-email-labeler.git
 cd auto-email-labeler
 ```
 ### 2. Load the extension in Chrome
-  - Open chrome://extensions
-  - Enable Developer mode
-  - Click Load unpacked
-  - Select the project directory
+- Open chrome://extensions
+- Enable Developer mode
+- Click Load unpacked
+- Select the project directory
 
 ### 3. Open Gmail
 The extension activates automatically on Gmail inbox pages.
 
 ## Security & Privacy
-  -No third-party dependencies
-  -No analytics or telemetry
-  -No email data leaves the browser
-  -All learned data is stored locally
+-No third-party dependencies
+-No analytics or telemetry
+-No email data leaves the browser
+-All learned data is stored locally
 
 ## Limitations
-  -Gmail DOM changes may require selector updates
-  -Model is intentionally lightweight
-  -Not designed for enterprise-scale automation
+-Gmail DOM changes may require selector updates
+-Model is intentionally lightweight
+-Not designed for enterprise-scale automation
 
 ## Future Improvements
-  -Smarter feature weighting
-  -Decay for stale sender associations
-  -Export / import learned state
-  -Optional user-defined rules
+-Smarter feature weighting
+-Decay for stale sender associations
+-Export / import learned state
+-Optional user-defined rules

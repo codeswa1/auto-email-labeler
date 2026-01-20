@@ -140,18 +140,18 @@ cd auto-email-labeler
 The extension activates automatically on Gmail inbox pages.
 
 ## Security & Privacy
--No third-party dependencies
--No analytics or telemetry
--No email data leaves the browser
--All learned data is stored locally
+- No third-party dependencies
+- No analytics or telemetry
+- No email data leaves the browser
+- All learned data is stored locally
 
 ## Limitations
--Gmail DOM changes may require selector updates
--Model is intentionally lightweight
--Not designed for enterprise-scale automation
+- Gmail DOM changes may require selector updates
+- Model is intentionally lightweight
+- Not designed for enterprise-scale automation
 
 ## Future Improvements
--Smarter feature weighting
--Decay for stale sender associations
--Export / import learned state
--Optional user-defined rules
+- Smarter feature weighting
+- Decay for stale sender associations
+- Export / import learned state
+- Optional user-defined rules

@@ -1,0 +1,15 @@
+body {
+  font-family: Arial, sans-serif;
+  padding: 10px;
+  width: 300px;
+}
+
+.label-row {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.label-row input {
+  flex: 1;
+}

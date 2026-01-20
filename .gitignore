@@ -1,0 +1,9 @@
+# OS files
+.DS_Store
+
+# Logs
+*.log
+
+# Env / secrets
+.env
+.env.local

@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Email Labeler",
+  "description": "Automatically labels emails using on-device learning.",
+  "version": "1.0.0",
+
+  "permissions": [
+    "storage",
+    "tabs",
+    "identity",
+    "identity.email"
+  ],
+
+  "host_permissions": [
+    "*://mail.google.com/*",
+    "*://outlook.live.com/*",
+    "*://outlook.com/*",
+    "*://hotmail.com/*",
+    "*://mail.yahoo.com/*"
+  ],
+
+  "oauth2": {
+    "client_id": "590450940640-9l860kqpraoe5rlphopnusc6io4f5oju.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+  },
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://mail.google.com/*",
+        "*://outlook.live.com/*",
+        "*://outlook.com/*",
+        "*://hotmail.com/*",
+        "*://mail.yahoo.com/*"
+      ],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}

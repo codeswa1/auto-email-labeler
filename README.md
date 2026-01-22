@@ -1,5 +1,9 @@
 # Auto Email Labeler – Gmail Chrome Extension
 
+The rapid growth in digital communication has led to a significant increase in the volume and heterogeneity of email messages received by users. Current email classification mechanisms predominantly rely on manual rule-based filtering or centralized, server-side machine learning models. These approaches suffer from limited adaptability, lack of user transparency, and substantial privacy concerns due to the external processing of sensitive email content.
+Furthermore, existing systems provide minimal support for client-side, real-time email labeling that operates entirely within the user’s browser environment. The absence of such mechanisms results in increased cognitive load, inefficient inbox management, and reduced user control over data handling and classification logic.
+The core problem addressed in this work is the absence of a privacy-preserving, client-side automated email labeling system that performs real-time classification without transmitting email data to external servers, while maintaining transparency, adaptability, and usability within web-based email interfaces.
+
 A privacy-first Chrome extension that automatically classifies and labels Gmail
 emails using client-side machine learning, sender memory, and Gmail DOM
 integration, with no backend and no external services.

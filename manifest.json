@@ -12,11 +12,7 @@
   ],
 
   "host_permissions": [
-    "*://mail.google.com/*",
-    "*://outlook.live.com/*",
-    "*://outlook.com/*",
-    "*://hotmail.com/*",
-    "*://mail.yahoo.com/*"
+    "*://mail.google.com/*"
   ],
 
   "oauth2": {
@@ -33,13 +29,9 @@
   "content_scripts": [
     {
       "matches": [
-        "*://mail.google.com/*",
-        "*://outlook.live.com/*",
-        "*://outlook.com/*",
-        "*://hotmail.com/*",
-        "*://mail.yahoo.com/*"
+        "*://mail.google.com/*"
       ],
-      "js": ["content_script.js"],
+      "js": ["ml_model.js", "content_script.js"],
       "run_at": "document_idle"
     }
   ],

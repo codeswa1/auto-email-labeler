@@ -14,31 +14,23 @@ const DEFAULT_SETTINGS = {
 };
 
 let settings = { ...DEFAULT_SETTINGS };
-let trainingDataset = [];
-let senderMemory = {};
 let labelMeta = {};
 let labelRules = {};
-let vocabulary = [];
-let idf = {};
-let centroids = {};
 let emailLabelMap = new Map();
-let debugLog = [];
 let panelEl = null;
 let panelVisible = false;
 let gmailFetchedCount = 0;
 let gmailTotalCount = 0;
 let lastMessageId = null;
-const MAX_DATASET = 2000;
 
 // Map to store dynamic colors for all labels
 const labelColors = {};
 
+// Using computeIDF, rebuildCentroids, vectorize, predictLabel, etc. from ml_model.js
+
 // ==============================
 // UTILITIES
 // ==============================
-function normalize(text){ return text?text.toLowerCase().replace(/[^a-z0-9 ]+/g," ").trim():""; }
-function tokenize(text){ return normalize(text).split(" ").filter(Boolean); }
-function cosineSimilarity(a,b){let dot=0,na=0,nb=0;for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];} return na&&nb?dot/(Math.sqrt(na)*Math.sqrt(nb)):0;}
 function saveSettingsViaBackground(settings){
   chrome.runtime.sendMessage({
     type: "SAVE_SETTINGS",
@@ -49,107 +41,45 @@ function saveSettingsViaBackground(settings){
 // ==============================
 // STORAGE LOAD
 // ==============================
-chrome.storage.local.get({ dataset: [], senderMemory: {}, lastMessageId: null, emailLabelMap: [] }, res => {
+chrome.storage.local.get({ 
+  dataset: [], 
+  senderMemory: {}, 
+  lastMessageId: null, 
+  emailLabelMap: [],
+  centroids: {},
+  vocabulary: [],
+  idf: {}
+}, res => {
   trainingDataset = res.dataset;
   senderMemory = res.senderMemory;
   lastMessageId = res.lastMessageId;
   emailLabelMap = new Map(res.emailLabelMap);
+  centroids = res.centroids || {};
+  vocabulary = res.vocabulary || [];
+  idf = res.idf || {};
 
   chrome.storage.sync.get({ labelMeta: {}, labelRules: {}, settings: DEFAULT_SETTINGS }, sync => {
     labelMeta = sync.labelMeta;
     labelRules = sync.labelRules;
     settings = { ...DEFAULT_SETTINGS, ...sync.settings };
-    rebuildModel();
     initFloatingButton();
     startGmailObserver();
+    if(Object.keys(centroids).length === 0 && trainingDataset.length > 0) {
+      chrome.runtime.sendMessage({ type: "REBUILD_MODEL" });
+    }
   });
 });
 
-// ==============================
-// MODEL
-// ==============================
-function rebuildModel(){
-  buildVocabulary();
-  computeIDF();
-  rebuildCentroids();
-}
-
-function buildVocabulary(){
-  const set = new Set();
-  trainingDataset.forEach(d => tokenize(d.sender+" "+d.subject).forEach(t=>set.add(t)));
-  vocabulary = Array.from(set);
-}
-
-function computeIDF(){
-  idf = {};
-  vocabulary.forEach(term => {
-    let count=0;
-    trainingDataset.forEach(d=>{ if(tokenize(d.sender+" "+d.subject).includes(term)) count++; });
-    idf[term] = Math.log(trainingDataset.length / (1+count));
-  });
-}
-
-function vectorize(text){
-  const tokens = tokenize(text);
-  return vocabulary.map(t => tokens.includes(t)?idf[t]||0:0);
-}
-
-function rebuildCentroids(){
-  centroids = {};
-  const grouped = {};
-  trainingDataset.forEach(d => { grouped[d.label] ??= []; grouped[d.label].push(vectorize(d.sender+" "+d.subject)); });
-  Object.entries(grouped).forEach(([label, vectors])=>{
-    const avg = new Array(vocabulary.length).fill(0);
-    vectors.forEach(v=>v.forEach((x,i)=>avg[i]+=x/vectors.length));
-    centroids[label] = avg;
-  });
-}
-
-// ==============================
-// DEBOUNCED MODEL REBUILD
-let rebuildDebounce;
-function rebuildModelDebounced(){
-  clearTimeout(rebuildDebounce);
-  rebuildDebounce = setTimeout(rebuildModel, 2000);
-}
-
-// ==============================
-// DEBOUNCED STORAGE SAVE
-let storageDebounce;
-function saveDataDebounced() {
-  clearTimeout(storageDebounce);
-  storageDebounce = setTimeout(() => {
-    const attemptSave = (retryCount = 0) => {
-      try {
-        chrome.storage.local.set({ 
-          dataset: trainingDataset, 
-          senderMemory, 
-          emailLabelMap: Array.from(emailLabelMap.entries()) 
-        });
-      } catch (e) {
-        if(retryCount<3) setTimeout(()=>attemptSave(retryCount+1),500);
-      }
-    };
-    attemptSave();
-  }, 1000);
-}
-
-// ==============================
-// PREDICTION
-// ==============================
-function predictLabel(sender, subject){
-  const senderKey = normalize(sender);
-  const vec = vectorize(sender+" "+subject);
-  let best = { label: "AUTO", confidence: 0 };
-  Object.entries(centroids).forEach(([label, centroid])=>{
-    let score = cosineSimilarity(vec, centroid);
-    if(settings.senderBoost && senderMemory[senderKey]?.[label]) score += 0.15;
-    if(score > best.confidence) best = { label, confidence: Math.min(score,1) };
-  });
-  debugLog.push({ sender, subject, ...best });
-  if(debugLog.length>30) debugLog.shift();
-  return best;
-}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") {
+    if (changes.centroids) centroids = changes.centroids.newValue;
+    if (changes.vocabulary) vocabulary = changes.vocabulary.newValue;
+    if (changes.idf) idf = changes.idf.newValue;
+    if (changes.dataset) trainingDataset = changes.dataset.newValue;
+    if (changes.senderMemory) senderMemory = changes.senderMemory.newValue;
+    if (changes.emailLabelMap) emailLabelMap = new Map(changes.emailLabelMap.newValue);
+  }
+});
 
 // ==============================
 // DYNAMIC LABEL COLOR
@@ -260,7 +190,7 @@ function applyNewLabel(prediction,newLabel,badge){
   trainingDataset.push({ sender:prediction.sender, subject:prediction.subject, label:newLabel, timestamp:Date.now(), source:"user-corrected" });
 
   saveDataDebounced();
-  rebuildModelDebounced();
+  chrome.runtime.sendMessage({ type: "REBUILD_MODEL" });
 
   if(badge){
     badge.textContent = newLabel;
@@ -443,7 +373,7 @@ function processUnreadEmails() {
 
     // Create prediction if missing
     if (!prediction) {
-      prediction = predictLabel(sender, subject);
+      prediction = predictLabel(sender, subject, settings.senderBoost);
       emailLabelMap.set(key, prediction);
     }
 
@@ -471,14 +401,14 @@ function startGmailObserver() {
   setTimeout(processUnreadEmails, 1000);
 
   let debounce;
+  // Limit observer to main table or body but filter mutations heavily
+  const target = document.querySelector(".AO") || document.body;
   new MutationObserver(() => {
     clearTimeout(debounce);
     debounce = setTimeout(processUnreadEmails, 300);
-  }).observe(document.body, {
+  }).observe(target, {
     childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["class"]
+    subtree: true
   });
 }
 

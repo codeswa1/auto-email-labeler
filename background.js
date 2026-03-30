@@ -1,3 +1,4 @@
+importScripts("ml_model.js");
 console.log("Background service worker active");
 
 // ==============================
@@ -10,7 +11,7 @@ const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 const REDIRECT_URI = `https://${chrome.runtime.id}.chromiumapp.org/`;
 const FETCH_BATCH_SIZE = 50;
 
-// Service-worker safe state (non-persistent)
+// Service-worker safe state (non-persistent variables)
 let accessToken = null;
 let offlineQueue = [];
 let lastMessageId = null;
@@ -19,9 +20,15 @@ let lastMessageId = null;
 // INIT (restore persisted state)
 // ==============================
 chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.get(["lastMessageId"], res => {
+  chrome.storage.local.get(["lastMessageId", "offlineQueue"], res => {
     lastMessageId = res.lastMessageId || null;
+    offlineQueue = res.offlineQueue || [];
   });
+});
+
+chrome.storage.local.get(["lastMessageId", "offlineQueue"], res => {
+  lastMessageId = res.lastMessageId || null;
+  offlineQueue = res.offlineQueue || [];
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -31,30 +38,29 @@ chrome.runtime.onInstalled.addListener(() => {
 // ==============================
 // AUTH
 // ==============================
-function authorizeGmail() {
+function authorizeGmail(interactive = true) {
   return new Promise((resolve, reject) => {
-    const authUrl =
-      `https://accounts.google.com/o/oauth2/v2/auth` +
-      `?client_id=${CLIENT_ID}` +
-      `&response_type=token` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&scope=${encodeURIComponent(SCOPES.join(" "))}` +
-      `&prompt=consent`;
-
-    chrome.identity.launchWebAuthFlow(
-      { url: authUrl, interactive: true },
-      redirectUrl => {
-        if (chrome.runtime.lastError || !redirectUrl) {
-          return reject(chrome.runtime.lastError || new Error("Auth failed"));
-        }
-
-        const match = redirectUrl.match(/access_token=([^&]+)/);
-        if (!match) return reject(new Error("Access token not found"));
-
-        accessToken = match[1];
-        resolve(accessToken);
+    chrome.identity.getAuthToken({ interactive }, function(token) {
+      if (chrome.runtime.lastError || !token) {
+        return reject(chrome.runtime.lastError || new Error("Auth failed"));
       }
-    );
+      accessToken = token;
+      resolve(token);
+    });
+  });
+}
+
+function decodeMime(str) {
+  if (!str) return "";
+  return str.replace(/=\?([^?]+)\?([QB])\?([^?]*)\?=/gi, function(match, charset, encoding, content) {
+    try {
+      if (encoding.toUpperCase() === 'B') return decodeURIComponent(escape(atob(content)));
+      if (encoding.toUpperCase() === 'Q') {
+        const decoded = content.replace(/_/g, ' ').replace(/=([A-F0-9]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        return decodeURIComponent(escape(decoded));
+      }
+    } catch(e) {}
+    return str;
   });
 }
 
@@ -111,8 +117,8 @@ async function processOfflineQueue() {
         msgData.payload.headers.map(h => [h.name, h.value])
       );
 
-      const sender = headersObj.From || "";
-      const subject = headersObj.Subject || "";
+      const sender = decodeMime(headersObj.From || "");
+      const subject = decodeMime(headersObj.Subject || "");
 
       chrome.storage.local.get({ dataset: [] }, res => {
         const dataset = res.dataset;
@@ -127,7 +133,7 @@ async function processOfflineQueue() {
       });
 
       lastMessageId = id;
-      chrome.storage.local.set({ lastMessageId });
+      chrome.storage.local.set({ lastMessageId, offlineQueue });
 
     } catch (err) {
       console.warn("Message fetch failed, retrying later");
@@ -158,8 +164,8 @@ async function learnFromThread(threadId) {
     msg.payload.headers.map(h => [h.name, h.value])
   );
 
-  const sender = headersObj.From || "";
-  const subject = headersObj.Subject || "";
+  const sender = decodeMime(headersObj.From || "");
+  const subject = decodeMime(headersObj.Subject || "");
 
   const userLabels = (msg.labelIds || []).filter(l =>
     l.startsWith("Label_")
@@ -207,6 +213,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "AUTO_LEARN_THREAD") {
     learnFromThread(msg.threadId);
+  }
+
+  if (msg.type === "REBUILD_MODEL") {
+    console.log("Background triggered model rebuild");
+    rebuildModelDebounced();
   }
 });
 

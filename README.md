@@ -39,9 +39,9 @@ This project focuses on:
   - Improves accuracy over time
 
 - **Privacy-First Design**
-  - No network requests
-  - No external APIs
-  - All data stays local to the browser
+  - No third-party network requests or telemetry
+  - Integrates securely with the native **Gmail API** (via Google OAuth) to fetch message metadata
+  - All learned data and AI models stay strictly local to your browser storage
 
 - **Native Gmail UI Integration**
   - Injects label badges directly into inbox rows
@@ -52,35 +52,34 @@ This project focuses on:
 ## Architecture
 ```
 ┌──────────────┐
-│ Gmail Inbox │
-│ (DOM) │
+│ Gmail Inbox  │
+│    (DOM)     │
 └──────┬───────┘
-│
-▼
-┌─────────────────────┐
-│ content_script.js │
-│ - DOM parsing │
-│ - Feature extraction│
-│ - Prediction logic │
-│ - UI badge injection│
+       │
+       ▼
+┌─────────────────────┐       ┌──────────────────────┐
+│  content_script.js  │       │     ml_model.js      │
+│ - DOM parsing       │ ◄───► │ - Feature extraction │
+│ - Prediction logic  │       │ - Vocabulary config  │
+│ - UI badge injection│       │ - Centroid inference │
+└──────┬──────────────┘       └──────────┬───────────┘
+       │                                 │
+       ▼                                 ▼
+┌─────────────────────┐       ┌──────────────────────┐
+│    background.js    │ ◄───► │  Gmail API (OAuth)   │
+│ - Model rebuilding  │       │ - Background fetching│
+│ - Sender memory     │       └──────────────────────┘
+│ - Training updates  │
 └──────┬──────────────┘
-│
-▼
+       │
+       ▼
 ┌─────────────────────┐
-│ background.js │
-│ - Model persistence │
-│ - Sender memory │
-│ - Training updates │
-└──────┬──────────────┘
-│
-▼
-┌─────────────────────┐
-│ Chrome Storage API │
-│ - Vocabulary │
-│ - Centroids │
-│ - Sender history │
+│ Chrome Storage API  │
+│ - Vocabulary        │
+│ - Centroids         │
+│ - Sender history    │
 └─────────────────────┘
-````
+```
 ---
 
 ## Machine Learning Approach
@@ -116,18 +115,20 @@ This project focuses on:
 ## Project Structure
 ```
 auto-email-labeler/
-├── background.js # Model state & persistence
-├── content_script.js # Gmail DOM logic & inference
-├── manifest.json # Extension configuration
-├── popup.html # Extension popup UI
-├── popup.js # Popup logic
-├── styles.css # Badge & UI styles
-├── icons/ # Extension icons
-└── LICENSE # MIT License
+├── ml_model.js         # Shared TF-IDF, vectorization, and inference logic
+├── background.js       # Model rebuilding, persistence, and Gmail API Sync
+├── content_script.js   # Gmail DOM observation logic & UI badge injection
+├── manifest.json       # Extension configuration (Manifest V3)
+├── popup.html          # Extension popup UI
+├── popup.js            # Popup logic
+├── styles.css          # Badge & popup UI styles
+├── icons/              # Extension icons
+└── LICENSE             # MIT License
 ```
 ---
 
-## Steps to Implement
+
+## Steps to Implement locally
 
 ### 1. Clone the repository
 ```bash
@@ -144,9 +145,9 @@ cd auto-email-labeler
 The extension activates automatically on Gmail inbox pages.
 
 ## Security & Privacy
-- No third-party dependencies
+- No third-party dependencies outside of Google's native Gmail API
 - No analytics or telemetry
-- No email data leaves the browser
+- No email data is sent to external or third-party servers
 - All learned data is stored locally
 
 ## Limitations

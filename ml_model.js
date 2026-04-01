@@ -1,5 +1,5 @@
 // ml_model.js
-// Extracted TF-IDF Model rebuilding and vectorization logic
+// Dual-engine Model: TF-IDF vs Semantic Ollama Embeddings
 
 var MAX_DATASET = 2000;
 var trainingDataset = [];
@@ -11,14 +11,37 @@ var debugLog = [];
 
 function normalize(text){ return text?text.toLowerCase().replace(/[^a-z0-9 ]+/g," ").trim():""; }
 function tokenize(text){ return normalize(text).split(" ").filter(Boolean); }
-function cosineSimilarity(a,b){
+
+function cosineSimilarity(a, b) {
   let dot=0,na=0,nb=0;
-  for(let i=0;i<a.length;i++){
-    dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];
+  for(let i=0; i<a.length; i++){
+    dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i];
   } 
-  return na&&nb?dot/(Math.sqrt(na)*Math.sqrt(nb)):0;
+  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
 }
 
+// =======================
+// OLLAMA API
+// =======================
+async function getOllamaEmbedding(text, url, model) {
+  try {
+    const res = await fetch(`${url}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt: text })
+    });
+    if (!res.ok) throw new Error("Ollama fetching error");
+    const data = await res.json();
+    return data.embedding;
+  } catch (err) {
+    console.error("Local Ollama API Error:", err);
+    return []; // Empty vector essentially forces a 0% match
+  }
+}
+
+// =======================
+// TF-IDF MATH
+// =======================
 function buildVocabulary(){
   const set = new Set();
   trainingDataset.forEach(d => tokenize(d.sender+" "+d.subject).forEach(t=>set.add(t)));
@@ -28,79 +51,96 @@ function buildVocabulary(){
 function computeIDF(){
   idf = {};
   vocabulary.forEach(term => {
-    let count=0;
-    trainingDataset.forEach(d=>{ if(tokenize(d.sender+" "+d.subject).includes(term)) count++; });
+    let count = 0;
+    trainingDataset.forEach(d => { if(tokenize(d.sender+" "+d.subject).includes(term)) count++; });
     idf[term] = Math.log(trainingDataset.length / (1+count));
   });
 }
 
-function vectorize(text){
+function tfIdfVectorize(text) {
   const tokens = tokenize(text);
   return vocabulary.map(t => tokens.includes(t)?idf[t]||0:0);
 }
 
-function rebuildCentroids(){
+// =======================
+// UNIFIED PIPELINE
+// =======================
+
+// Awaitable predict instead of sync
+async function predictLabel(sender, subject, settings) {
+  const text = sender + " " + subject;
+  let vec = [];
+  
+  if (settings.ollamaEnabled && settings.ollamaUrl && settings.ollamaModel) {
+    vec = await getOllamaEmbedding(text, settings.ollamaUrl, settings.ollamaModel);
+  } else {
+    vec = tfIdfVectorize(text);
+  }
+
+  const senderKey = normalize(sender);
+  let best = { label: "AUTO", confidence: 0 };
+  
+  if (vec && vec.length > 0) {
+    Object.entries(centroids).forEach(([label, centroid]) => {
+      if (!centroid || centroid.length === 0 || centroid.length !== vec.length) return; // Mismatched vector architectures
+      
+      let score = cosineSimilarity(vec, centroid);
+      if (settings.senderBoost && senderMemory[senderKey]?.[label]) score += 0.15;
+      if (score > best.confidence) best = { label, confidence: Math.min(score, 1) };
+    });
+  }
+
+  debugLog.push({ sender, subject, ...best });
+  if(debugLog.length > 30) debugLog.shift();
+  return best;
+}
+
+// Group emails into mathematical averages based on label
+async function rebuildCentroids(settings) {
   centroids = {};
   const grouped = {};
-  trainingDataset.forEach(d => { grouped[d.label] ??= []; grouped[d.label].push(vectorize(d.sender+" "+d.subject)); });
-  Object.entries(grouped).forEach(([label, vectors])=>{
-    const avg = new Array(vocabulary.length).fill(0);
-    vectors.forEach(v=>v.forEach((x,i)=>avg[i]+=x/vectors.length));
+  
+  for (let i = 0; i < trainingDataset.length; i++) {
+    const d = trainingDataset[i];
+    const text = d.sender + " " + d.subject;
+    
+    let vec = [];
+    if (settings.ollamaEnabled) {
+      // Re-use cached vector if it was already fetched to save API quotas and time
+      if (!d.ollamaVector) {
+        d.ollamaVector = await getOllamaEmbedding(text, settings.ollamaUrl, settings.ollamaModel);
+      }
+      vec = d.ollamaVector;
+    } else {
+      vec = tfIdfVectorize(text);
+    }
+    
+    if (vec.length > 0) {
+      grouped[d.label] ??= []; 
+      grouped[d.label].push(vec);
+    }
+  }
+  
+  // Calculate average vector point (Cluster Centroid) for each label
+  Object.entries(grouped).forEach(([label, vectors]) => {
+    if (vectors.length === 0) return;
+    const dim = vectors[0].length;
+    const avg = new Array(dim).fill(0);
+    
+    vectors.forEach(v => {
+      for (let i = 0; i < dim; i++) {
+        avg[i] += (v[i] || 0) / vectors.length;
+      }
+    });
     centroids[label] = avg;
   });
 }
 
-function rebuildModel(){
-  buildVocabulary();
-  computeIDF();
-  rebuildCentroids();
-}
-
-function predictLabel(sender, subject, senderBoostEnabled){
-  const senderKey = normalize(sender);
-  const vec = vectorize(sender+" "+subject);
-  let best = { label: "AUTO", confidence: 0 };
-  Object.entries(centroids).forEach(([label, centroid])=>{
-    let score = cosineSimilarity(vec, centroid);
-    if(senderBoostEnabled && senderMemory[senderKey]?.[label]) score += 0.15;
-    if(score > best.confidence) best = { label, confidence: Math.min(score,1) };
-  });
-  debugLog.push({ sender, subject, ...best });
-  if(debugLog.length>30) debugLog.shift();
-  return best;
-}
-
-let rebuildDebounce;
-function rebuildModelDebounced(){
-  clearTimeout(rebuildDebounce);
-  rebuildDebounce = setTimeout(() => {
-    rebuildModel();
-    if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.storage.local.set({ centroids, vocabulary, idf });
-    }
-  }, 2000);
-}
-
-let storageDebounce;
-function saveDataDebounced() {
-  clearTimeout(storageDebounce);
-  storageDebounce = setTimeout(() => {
-    const attemptSave = (retryCount = 0) => {
-      try {
-        if (emailLabelMap.size > 5000) {
-          const entries = Array.from(emailLabelMap.entries());
-          emailLabelMap = new Map(entries.slice(entries.length - 2500));
-        }
-
-        chrome.storage.local.set({ 
-          dataset: trainingDataset, 
-          senderMemory: senderMemory, 
-          emailLabelMap: Array.from(emailLabelMap.entries()) 
-        });
-      } catch (e) {
-        if(retryCount<3) setTimeout(()=>attemptSave(retryCount+1),500);
-      }
-    };
-    attemptSave();
-  }, 1000);
+// Exposed rebuild method. Run predominantly by offscreen.js
+async function rebuildModel(settings) {
+  if (!settings.ollamaEnabled) {
+    buildVocabulary();
+    computeIDF();
+  }
+  await rebuildCentroids(settings);
 }

@@ -8,11 +8,15 @@
     "storage",
     "tabs",
     "identity",
-    "identity.email"
+    "identity.email",
+    "alarms",
+    "offscreen"
   ],
 
   "host_permissions": [
-    "*://mail.google.com/*"
+    "*://mail.google.com/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*"
   ],
 
   "oauth2": {
@@ -31,7 +35,7 @@
       "matches": [
         "*://mail.google.com/*"
       ],
-      "js": ["ml_model.js", "content_script.js"],
+      "js": ["content_script.js"],
       "run_at": "document_idle"
     }
   ],

@@ -3,8 +3,7 @@ console.log("Auto Email Labeler Thin Client active");
 const DEFAULT_SETTINGS = {
   autoApply: true, autoLearn: true, senderBoost: true,
   debug: false, buttonPos: { top: 120, left: window.innerWidth - 140 },
-  gmailApiEnabled: false, badgeVisibility: {},
-  ollamaEnabled: false, ollamaUrl: "http://localhost:11434", ollamaModel: "llama3.2"
+  gmailApiEnabled: false, badgeVisibility: {}
 };
 
 let settings = { ...DEFAULT_SETTINGS };
@@ -128,11 +127,12 @@ function applyManualLabel(row, newLabel, badge) {
 
   const sender = senderContainer.innerText;
   const subject = subjectSpan.innerText;
+  const messageId = row.getAttribute("data-legacy-message-id") || row.getAttribute("data-legacy-thread-id");
 
   badge.textContent = newLabel;
   badge.style.background = getOrCreateLabelColor(newLabel);
 
-  chrome.runtime.sendMessage({ type: "APPLY_LABEL", sender, subject, newLabel });
+  chrome.runtime.sendMessage({ type: "APPLY_LABEL", sender, subject, newLabel, messageId });
 }
 
 // ==============================
@@ -172,6 +172,7 @@ function processInboxRows() {
 
     const sender = senderSpan.innerText;
     const subject = subjectSpan.innerText;
+    const messageId = row.getAttribute("data-legacy-message-id") || row.getAttribute("data-legacy-thread-id");
 
     // Fix for: "Extension context invalidated" development error
     if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) {
@@ -179,7 +180,7 @@ function processInboxRows() {
       return;
     }
 
-    chrome.runtime.sendMessage({ type: "PREDICT", sender, subject }, (prediction) => {
+    chrome.runtime.sendMessage({ type: "PREDICT", sender, subject, messageId }, (prediction) => {
       if (chrome.runtime.lastError) {
         delete row.dataset.autoLabeled;
         return;
@@ -207,7 +208,7 @@ function initFloatingButton() {
   const btn = document.createElement("div");
   btn.id = "autoLabelerBtn";
   btn.textContent = "Auto Labeler";
-  btn.style.cssText = `position:fixed;top:${settings.buttonPos.top}px;left:${settings.buttonPos.left}px;
+  btn.style.cssText = `position:fixed;top:${settings.buttonPos?.top || 120}px;left:${settings.buttonPos?.left || window.innerWidth - 140}px;
     background:#1a73e8;color:#fff;padding:6px 10px;border-radius:16px;font-size:12px;font-weight:600;
     cursor:grab;z-index:9999;user-select:none;transition:transform 0.15s,box-shadow 0.15s;`;
   
@@ -220,7 +221,10 @@ function initFloatingButton() {
     const up = () => {
       document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
       if (!dragged) togglePanel();
-      else { settings.buttonPos = { top: btn.offsetTop, left: btn.offsetLeft }; saveSettings(settings); }
+      else { 
+        settings.buttonPos = { top: btn.offsetTop, left: btn.offsetLeft }; 
+        saveSettings(settings);
+      }
     };
     document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
   };
@@ -232,58 +236,37 @@ function togglePanel() { panelVisible ? closePanel() : openPanel(); }
 function openPanel() {
   if (panelEl) return; panelVisible = true;
   panelEl = document.createElement("div");
-  panelEl.style.cssText = `position:fixed;top:${settings.buttonPos.top+40}px;left:${settings.buttonPos.left}px;
+  panelEl.style.cssText = `position:fixed;top:${(settings.buttonPos?.top || 120)+40}px;left:${settings.buttonPos?.left || window.innerWidth - 140}px;
     background:#fff;border:1px solid #ccc;padding:12px;width:320px;font-size:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2);border-radius:8px;font-family:sans-serif;`;
   
   chrome.runtime.sendMessage({ type: "GET_STATS" }, stats => {
     panelEl.innerHTML = `
       <b style="font-size:14px;">Auto Email Labeler (Thin Client)</b><hr style="margin:8px 0;"/>
-      <label style="display:block;margin-bottom:4px"><input type="checkbox" id="autoApply"> Auto Apply Labels</label>
+      <label style="display:block;margin-bottom:4px"><input type="checkbox" id="autoApply"> Auto Apply Labels natively in Gmail</label>
       <label style="display:block;margin-bottom:4px"><input type="checkbox" id="senderBoost"> Sender Memory Boost</label>
       <label style="display:block;margin-bottom:4px"><input type="checkbox" id="gmailApi"> Background Sync API</label>
-      <label style="display:block;margin-bottom:4px;color:#0e8a16;font-weight:bold"><input type="checkbox" id="ollamaEnabled"> Enable Ollama Semantic AI</label>
-      <div id="ollamaBox" style="display:${settings.ollamaEnabled ? 'block' : 'none'}; padding-left:14px; margin-bottom:8px; border-left:2px solid #ccc;">
-        URL: <input type="text" id="ollamaUrl" style="width:100%; font-size:10px; margin-bottom:4px;" placeholder="http://localhost:11434">
-        Model: 
-        <select id="ollamaModel" style="width:100%; font-size:10px; padding:2px;">
-          <option value="llama3.2">llama3.2:latest</option>
-          <option value="deepseek-coder">deepseek-coder:latest</option>
-        </select>
-      </div>
       <hr style="margin:8px 0;"/>
       <b>Server Stats:</b><br/>
-      Samples Learned: ${stats.samples || 0}<br/>
-      Total Labels: ${stats.labels || "None"}<br/>
-      Offline Queue: ${stats.queue || 0} items<hr style="margin:8px 0;"/>
+      Samples Learned: ${stats?.samples || 0}<br/>
+      Total Labels: ${stats?.labels || "None"}<br/>
+      Offline Queue: ${stats?.queue || 0} items<hr style="margin:8px 0;"/>
       <button id="closeBtn" style="padding:4px 8px;background:#eee;border:1px solid #ccc;border-radius:4px;cursor:pointer;">Close</button>
-      <pre style="max-height:100px;overflow:auto;background:#f8f8f8;padding:4px;margin-top:8px;font-size:10px;">${debugLog.join('\\n')}</pre>
+      <pre style="max-height:100px;overflow:auto;background:#f8f8f8;padding:4px;margin-top:8px;font-size:10px;">${debugLog.join('\n')}</pre>
     `;
     
     document.body.appendChild(panelEl);
 
-    ["autoApply", "senderBoost", "gmailApi", "ollamaEnabled"].forEach(key => {
+    ["autoApply", "senderBoost", "gmailApi"].forEach(key => {
       const el = panelEl.querySelector(`#${key}`);
-      el.checked = settings[key];
+      const mapKey = key === "gmailApi" ? "gmailApiEnabled" : key;
+      el.checked = settings[mapKey];
       el.onchange = () => { 
-        settings[key] = el.checked; 
-        
-        if (key === "ollamaEnabled") {
-          panelEl.querySelector("#ollamaBox").style.display = el.checked ? 'block' : 'none';
-          // Tell background to rebuild the math centroids immediately using the new engine
-          chrome.runtime.sendMessage({ type: "OFFSCREEN_REBUILD_MODEL", settings });
-        }
-        
-        saveSettings(settings); 
+        settings[mapKey] = el.checked; 
+        saveSettings(settings);
         if (key === "gmailApi" && el.checked) {
           chrome.runtime.sendMessage({ type: "FETCH_GMAIL" });
         }
       };
-    });
-    
-    ["ollamaUrl", "ollamaModel"].forEach(key => {
-      const el = panelEl.querySelector(`#${key}`);
-      el.value = settings[key];
-      el.onchange = () => { settings[key] = el.value.trim(); saveSettings(settings); };
     });
 
     panelEl.querySelector("#closeBtn").onclick = closePanel;

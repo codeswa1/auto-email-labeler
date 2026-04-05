@@ -9,7 +9,9 @@ let accessToken = null;
 let lastMessageId = null;
 let offlineQueue = [];
 let emailLabelMap = new Map();
-let settings = { senderBoost: true, gmailApiEnabled: false, ollamaEnabled: false, ollamaUrl: "http://localhost:11434", ollamaModel: "mxbai-embed-large" };
+let settings = { autoApply: true, senderBoost: true, gmailApiEnabled: false };
+let labelCache = null;
+const nativelyApplied = new Set();
 
 // ==============================
 // INIT
@@ -65,7 +67,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ success: true });
   }
   if (msg.type === "FETCH_GMAIL") {
-    fetchGmailEmails().then(() => sendResponse({ success: true })).catch(e => sendResponse({ error: e.message }));
+    fetchGmailEmails(true).then(() => sendResponse({ success: true })).catch(e => sendResponse({ error: e.message }));
     return true;
   }
   if (msg.type === "GET_STATS") {
@@ -84,12 +86,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function handlePredict(msg) {
   const key = normalize(msg.sender + "::" + msg.subject);
-  if (emailLabelMap.has(key)) return emailLabelMap.get(key);
+  let result;
+  if (emailLabelMap.has(key)) {
+     result = emailLabelMap.get(key);
+  } else {
+     // Uses memory objects built by IDB/Init, now passes settings
+     result = await predictLabel(msg.sender, msg.subject, settings);
+     emailLabelMap.set(key, result);
+     saveStoreData(["emailLabelMap"]);
+  }
   
-  // Uses memory objects built by IDB/Init, now passes settings
-  const result = await predictLabel(msg.sender, msg.subject, settings);
-  emailLabelMap.set(key, result);
-  saveStoreData(["emailLabelMap"]);
+  if (settings.autoApply && msg.messageId && result && result.label && result.label !== "AUTO") {
+    applyLabelToMessageId(msg.messageId, result.label);
+  }
+  
   return result;
 }
 
@@ -100,6 +110,10 @@ async function handleApplyLabel(msg) {
   const senderKey = normalize(msg.sender);
   senderMemory[senderKey] ??= {};
   senderMemory[senderKey][msg.newLabel] = (senderMemory[senderKey][msg.newLabel] || 0) + 1;
+
+  if (settings.autoApply && msg.messageId && msg.newLabel) {
+    applyLabelToMessageId(msg.messageId, msg.newLabel, true);
+  }
 
   if (trainingDataset.length > MAX_DATASET) trainingDataset.shift();
   trainingDataset.push({ sender: msg.sender, subject: msg.subject, label: msg.newLabel, timestamp: Date.now(), source: "user-corrected" });
@@ -169,6 +183,59 @@ async function saveStoreDataDebounced(keys = []) {
 // ==============================
 // GMAIL OAUTH & API FETCHING
 // ==============================
+
+async function getOrCreateGmailLabel(labelName) {
+  if (!accessToken) await authorizeGmail(false);
+  
+  if (!labelCache) {
+    const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/labels", { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) {
+      const data = await res.json();
+      labelCache = data.labels || [];
+    } else {
+      labelCache = [];
+    }
+  }
+  
+  let label = labelCache.find(l => l.name === labelName || l.name.toLowerCase() === labelName.toLowerCase());
+  if (!label) {
+    const createRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: labelName,
+        labelListVisibility: "labelShow",
+        messageListVisibility: "show"
+      })
+    });
+    if (createRes.ok) {
+      label = await createRes.json();
+      labelCache.push(label);
+    }
+  }
+  return label ? label.id : null;
+}
+
+async function applyLabelToMessageId(messageId, labelName, force = false) {
+  if (!force && nativelyApplied.has(messageId)) return;
+  try {
+    const labelId = await getOrCreateGmailLabel(labelName);
+    if (!labelId) return;
+
+    await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        addLabelIds: [labelId],
+        removeLabelIds: ["INBOX"]
+      })
+    });
+    nativelyApplied.add(messageId);
+    if (nativelyApplied.size > 2000) nativelyApplied.clear();
+  } catch(e) {
+    console.error("Failed to apply native label", e);
+  }
+}
 function authorizeGmail(interactive = true) {
   return new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({ interactive }, function(token) {
@@ -188,8 +255,8 @@ function decodeMime(str) {
   });
 }
 
-async function fetchGmailEmails() {
-  if (!accessToken) await authorizeGmail(false);
+async function fetchGmailEmails(interactive = false) {
+  if (!accessToken) await authorizeGmail(interactive);
   let nextPageToken = null, fetchedCount = 0;
   
   do {
@@ -223,11 +290,20 @@ async function processOfflineQueue() {
       const msgData = await res.json();
       const headersObj = Object.fromEntries(msgData.payload.headers.map(h => [h.name, h.value]));
       
+      const senderDecoded = decodeMime(headersObj.From || "");
+      const subjectDecoded = decodeMime(headersObj.Subject || "");
+
       trainingDataset.push({
-        sender: decodeMime(headersObj.From || ""),
-        subject: decodeMime(headersObj.Subject || ""),
+        sender: senderDecoded,
+        subject: subjectDecoded,
         label: "AUTO", timestamp: Date.now(), source: "gmail-auto"
       });
+      if (settings.autoApply) {
+        const prediction = await predictLabel(senderDecoded, subjectDecoded, settings);
+        if (prediction && prediction.label && prediction.label !== "AUTO") {
+          applyLabelToMessageId(id, prediction.label);
+        }
+      }
       lastMessageId = id;
       saveStoreDataDebounced(["dataset", "queue", "lastMessageId"]);
     } catch (err) {

@@ -1,26 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { font-family: sans-serif; width: 320px; padding: 12px; font-size: 13px; color: #333; }
+    h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #ccc; padding-bottom: 8px; }
+    label { display: block; margin-bottom: 8px; font-size: 13px; cursor: pointer; }
+    .stats { background: #f9f9f9; padding: 8px; border-radius: 4px; font-size: 12px; line-height: 1.5; }
+    .bold { font-weight: bold; }
+  </style>
 </head>
 <body>
 
-<h3>Auto Email Labeler</h3>
+<h3>Auto Email Labeler Settings</h3>
 
-<label>
-  Min Show Confidence: <span id="minShowVal"></span>
-</label>
-<input type="range" id="minShow" min="0" max="1" step="0.05">
+<label><input type="checkbox" id="autoApply"> Auto Apply Labels natively in Gmail</label>
+<label><input type="checkbox" id="senderBoost"> Sender Memory Boost</label>
+<label><input type="checkbox" id="gmailApi"> Background Sync API</label>
 
-<label>
-  Min Apply Confidence: <span id="minApplyVal"></span>
-</label>
-<input type="range" id="minApply" min="0" max="1" step="0.05">
-
-<label>
-  Min Archive Confidence: <span id="minArchiveVal"></span>
-</label>
-<input type="range" id="minArchive" min="0" max="1" step="0.05">
+<hr/>
+<div class="stats">
+  <span class="bold">Server Stats:</span><br/>
+  Samples Learned: <span id="statsSamples">0</span><br/>
+  Total Labels: <span id="statsLabels">None</span><br/>
+  Offline Queue: <span id="statsQueue">0</span> items
+</div>
 
 <script src="popup.js"></script>
 </body>

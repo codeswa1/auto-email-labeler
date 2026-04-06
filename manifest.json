@@ -47,5 +47,20 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
-  }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "visualization.html",
+        "visualization.css",
+        "visualization.js",
+        "Chart.min.js",
+        "idb_store.js"
+      ],
+      "matches": [
+        "*://mail.google.com/*"
+      ]
+    }
+  ]
 }

@@ -90,6 +90,23 @@ async function predictLabel(sender, subject, settings) {
     });
   }
 
+  let isGraduated = false;
+  if (senderMemory[senderKey]) {
+    // If the user has manually corrected or approved this sender 3 or more times
+    const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
+    if (totalApprovals >= 3) {
+      isGraduated = true;
+    }
+    
+    // As Architect's rule: if they strictly have a specific preferred label over 2 times, bypass TF-IDF totally to prevent regression
+    const bestSenderOverride = Object.entries(senderMemory[senderKey]).sort((a,b)=>b[1]-a[1])[0];
+    if (bestSenderOverride && bestSenderOverride[1] >= 2) {
+       best = { label: bestSenderOverride[0], confidence: 1.0 };
+    }
+  }
+  
+  best.isGraduated = isGraduated;
+
   debugLog.push({ sender, subject, ...best });
   if(debugLog.length > 30) debugLog.shift();
   return best;
@@ -102,7 +119,7 @@ async function rebuildCentroids(settings) {
   
   for (let i = 0; i < trainingDataset.length; i++) {
     const d = trainingDataset[i];
-    const text = d.sender + " " + d.subject;
+    const text = normalize(d.sender) + " " + normalize(d.subject) + " " + normalize(d.snippet || "");
     
     let vec = [];
     if (settings.ollamaEnabled) {
@@ -115,7 +132,7 @@ async function rebuildCentroids(settings) {
       vec = tfIdfVectorize(text);
     }
     
-    if (vec.length > 0) {
+    if (vec.length > 0 && d.label !== "AUTO") {
       grouped[d.label] ??= []; 
       grouped[d.label].push(vec);
     }

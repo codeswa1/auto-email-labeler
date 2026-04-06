@@ -6,7 +6,7 @@ const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 const FETCH_BATCH_SIZE = 50;
 
 let accessToken = null;
-let lastMessageId = null;
+let currentHistoryId = null;
 let offlineQueue = [];
 let emailLabelMap = new Map();
 let settings = { autoApply: true, senderBoost: true, gmailApiEnabled: false };
@@ -23,7 +23,7 @@ async function init() {
   vocabulary = state.vocabulary || [];
   idf = state.idf || {};
   centroids = state.centroids || {};
-  lastMessageId = state.lastMessageId || null;
+  currentHistoryId = state.currentHistoryId || null;
   offlineQueue = state.offlineQueue || [];
   emailLabelMap = new Map(state.emailLabelMap || []);
 
@@ -31,14 +31,14 @@ async function init() {
     if (sync.settings) settings = { ...settings, ...sync.settings };
   });
 
-  chrome.alarms.create("syncGmail", { periodInMinutes: 5 });
+  chrome.alarms.create("syncGmail", { periodInMinutes: 1 });
 }
 init();
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "syncGmail" && settings.gmailApiEnabled) {
-    if (offlineQueue.length > 0) processOfflineQueue();
-    else fetchGmailEmails().catch(e => console.error("Auto fetch error", e));
+    if (offlineQueue.length > 0) processOfflineQueue().catch(e => console.warn("offline queue err", e.message));
+    else fetchGmailEmails(false).catch(e => console.warn("Auto fetch err:", e.message));
   }
 });
 
@@ -63,7 +63,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "SAVE_SETTINGS") {
     chrome.storage.sync.set({ settings: msg.settings });
     settings = msg.settings;
-    if (settings.gmailApiEnabled) fetchGmailEmails();
     sendResponse({ success: true });
   }
   if (msg.type === "FETCH_GMAIL") {
@@ -89,14 +88,23 @@ async function handlePredict(msg) {
   let result;
   if (emailLabelMap.has(key)) {
      result = emailLabelMap.get(key);
+     
+     // Retroactively guarantee the graduation flag checks out on loaded cache entries!
+     const senderKey = normalize(msg.sender);
+     if (senderMemory[senderKey]) {
+       const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
+       result.isGraduated = totalApprovals >= 3;
+     } else {
+       result.isGraduated = false;
+     }
   } else {
-     // Uses memory objects built by IDB/Init, now passes settings
-     result = await predictLabel(msg.sender, msg.subject, settings);
+     // Uses memory objects built by IDB/Init, now passes snippet payload explicitly
+     result = await predictLabel(msg.sender, msg.subject, msg.snippet || "", settings);
      emailLabelMap.set(key, result);
      saveStoreData(["emailLabelMap"]);
   }
   
-  if (settings.autoApply && msg.messageId && result && result.label && result.label !== "AUTO") {
+  if (settings.autoApply && msg.messageId && result && result.label && result.label !== "AUTO" && result.isGraduated) {
     applyLabelToMessageId(msg.messageId, result.label);
   }
   
@@ -104,19 +112,27 @@ async function handlePredict(msg) {
 }
 
 async function handleApplyLabel(msg) {
-  const key = normalize(msg.sender + "::" + msg.subject);
-  emailLabelMap.set(key, { label: msg.newLabel, confidence: 1 });
-  
   const senderKey = normalize(msg.sender);
+  const key = normalize(msg.sender + "::" + msg.subject);
+  
+  // Wipe cache for any email matching this sender so it forces re-prediction with new weights
+  Array.from(emailLabelMap.keys()).forEach(k => {
+    if (k.startsWith(senderKey)) emailLabelMap.delete(k);
+  });
+  
   senderMemory[senderKey] ??= {};
   senderMemory[senderKey][msg.newLabel] = (senderMemory[senderKey][msg.newLabel] || 0) + 1;
+  const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
+  
+  // Directly set the specific corrected subject key to the explicit label WITH the grad flag
+  emailLabelMap.set(key, { label: msg.newLabel, confidence: 1, isGraduated: totalApprovals >= 3 });
 
   if (settings.autoApply && msg.messageId && msg.newLabel) {
     applyLabelToMessageId(msg.messageId, msg.newLabel, true);
   }
 
   if (trainingDataset.length > MAX_DATASET) trainingDataset.shift();
-  trainingDataset.push({ sender: msg.sender, subject: msg.subject, label: msg.newLabel, timestamp: Date.now(), source: "user-corrected" });
+  trainingDataset.push({ sender: msg.sender, subject: msg.subject, snippet: msg.snippet || "", label: msg.newLabel, timestamp: Date.now(), source: "user-corrected" });
 
   await saveStoreData(["senderMemory", "dataset", "emailLabelMap"]);
   triggerOffscreenRebuild();
@@ -168,7 +184,7 @@ async function saveStoreData(keys = []) {
   if (keys.includes("senderMemory")) promises.push(idb.set("senderMemory", senderMemory));
   if (keys.includes("emailLabelMap")) promises.push(idb.set("emailLabelMap", Array.from(emailLabelMap.entries())));
   if (keys.includes("queue")) promises.push(idb.set("offlineQueue", offlineQueue));
-  if (keys.includes("lastMessageId")) promises.push(idb.set("lastMessageId", lastMessageId));
+  if (keys.includes("historyId")) promises.push(idb.set("currentHistoryId", currentHistoryId));
 
   await Promise.all(promises);
 }
@@ -239,7 +255,9 @@ async function applyLabelToMessageId(messageId, labelName, force = false) {
 function authorizeGmail(interactive = true) {
   return new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({ interactive }, function(token) {
-      if (chrome.runtime.lastError || !token) return reject(chrome.runtime.lastError);
+      if (chrome.runtime.lastError || !token) {
+        return reject(new Error(chrome.runtime.lastError ? chrome.runtime.lastError.message : "No token returned"));
+      }
       accessToken = token; resolve(token);
     });
   });
@@ -256,27 +274,70 @@ function decodeMime(str) {
 }
 
 async function fetchGmailEmails(interactive = false) {
-  if (!accessToken) await authorizeGmail(interactive);
-  let nextPageToken = null, fetchedCount = 0;
-  
-  do {
-    const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-    url.searchParams.set("maxResults", FETCH_BATCH_SIZE);
-    if (nextPageToken) url.searchParams.set("pageToken", nextPageToken);
-    
-    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!res.ok) throw new Error("List fetch failed");
-    
-    const data = await res.json();
-    nextPageToken = data.nextPageToken;
-    
-    for (const m of data.messages || []) {
-      if (lastMessageId && m.id === lastMessageId) break;
-      offlineQueue.push(m.id);
-      fetchedCount++;
+  if (!accessToken) {
+    try {
+      await authorizeGmail(interactive);
+    } catch (e) {
+      if (!interactive) return; // fail silently in background mode
+      throw e;
     }
-    await processOfflineQueue();
-  } while (nextPageToken && fetchedCount < 200);
+  }
+
+  try {
+    if (!currentHistoryId) {
+      // Establish fresh historyId baseline and fetch few latest
+      const pRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (pRes.status === 401) {
+        await new Promise(r => chrome.identity.removeCachedAuthToken({token: accessToken}, r));
+        accessToken = null;
+        return fetchGmailEmails(interactive);
+      }
+      if (!pRes.ok) return;
+      const pData = await pRes.json();
+      currentHistoryId = pData.historyId;
+      saveStoreData(["historyId"]);
+
+      const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+      url.searchParams.set("maxResults", "10"); // just a baseline
+      url.searchParams.set("q", "is:unread");
+      const mRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+      const mData = await mRes.json();
+      for (const m of mData.messages || []) offlineQueue.push(m.id);
+    } else {
+      // Delta pull
+      const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/history");
+      url.searchParams.set("startHistoryId", currentHistoryId);
+      url.searchParams.set("historyTypes", "messageAdded");
+      
+      const hRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (hRes.status === 401) {
+        await new Promise(r => chrome.identity.removeCachedAuthToken({token: accessToken}, r));
+        accessToken = null;
+        return fetchGmailEmails(interactive);
+      }
+      if (hRes.status === 404) {
+        currentHistoryId = null; // Stale history, reset
+        return fetchGmailEmails(interactive);
+      }
+      
+      if (!hRes.ok) return;
+      const hData = await hRes.json();
+      currentHistoryId = hData.historyId || currentHistoryId;
+      saveStoreData(["historyId"]);
+
+      for (const record of hData.history || []) {
+        for (const msgAdded of record.messagesAdded || []) {
+          if (!offlineQueue.includes(msgAdded.message.id)) {
+             offlineQueue.push(msgAdded.message.id);
+          }
+        }
+      }
+    }
+
+    if (offlineQueue.length > 0) await processOfflineQueue();
+  } catch (err) {
+    if (interactive) throw err;
+  }
 }
 
 async function processOfflineQueue() {
@@ -292,20 +353,21 @@ async function processOfflineQueue() {
       
       const senderDecoded = decodeMime(headersObj.From || "");
       const subjectDecoded = decodeMime(headersObj.Subject || "");
+      const snippet = msgData.snippet || "";
 
       trainingDataset.push({
         sender: senderDecoded,
         subject: subjectDecoded,
+        snippet: snippet,
         label: "AUTO", timestamp: Date.now(), source: "gmail-auto"
       });
       if (settings.autoApply) {
-        const prediction = await predictLabel(senderDecoded, subjectDecoded, settings);
-        if (prediction && prediction.label && prediction.label !== "AUTO") {
+        const prediction = await predictLabel(senderDecoded, subjectDecoded, snippet, settings);
+        if (prediction && prediction.label && prediction.label !== "AUTO" && prediction.isGraduated) {
           applyLabelToMessageId(id, prediction.label);
         }
       }
-      lastMessageId = id;
-      saveStoreDataDebounced(["dataset", "queue", "lastMessageId"]);
+      saveStoreDataDebounced(["dataset", "queue"]);
     } catch (err) {
       offlineQueue.unshift(id);
       break;

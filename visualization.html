@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Auto Email Labeler Dashboard</title>
+  <link rel="stylesheet" href="visualization.css">
+  <!-- Load IndexedDB helper for direct state access -->
+  <script src="idb_store.js"></script>
+  <!-- Load Chart.js for building our visualization graph instances -->
+  <script src="Chart.min.js"></script>
+</head>
+<body>
+  <div class="dashboard-container">
+    <header class="header">
+      <h1>Label Intelligence Dashboard</h1>
+      <p>Visualizing local ML model patterns and training data distribution.</p>
+    </header>
+
+    <div class="stats-row" id="statsRow">
+      <!-- Quick stats loaded via JS -->
+    </div>
+
+    <div class="chart-grid">
+      <div class="chart-card">
+        <h2>Inbox Categorization Map</h2>
+        <div class="canvas-wrapper">
+          <canvas id="donutChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h2>Label Volume Analysis</h2>
+        <div class="canvas-wrapper">
+          <canvas id="barChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <div class="chart-card" style="margin-top: 2rem;">
+      <h2>Label Velocity (Time-Series Activity)</h2>
+      <div class="canvas-wrapper" style="min-height: 350px;">
+        <canvas id="lineChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drilldown Modal -->
+  <div id="drilldownModal" class="drilldown-modal">
+    <div class="drilldown-content">
+      <div class="drilldown-header">
+        <h2 id="drilldownTitle">Loading...</h2>
+        <button id="closeDrilldown">&times;</button>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:25%">Sender ID</th>
+              <th>Subject Line</th>
+              <th style="width:20%">Date / Time</th>
+            </tr>
+          </thead>
+          <tbody id="drilldownBody">
+            <!-- Data injected via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="visualization.js"></script>
+</body>
+</html>

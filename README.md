@@ -1,162 +1,106 @@
-# Auto Email Labeler – Gmail Chrome Extension
+# Auto Email Labeler: System Design & Engineering
 
-The rapid growth in digital communication has led to a significant increase in the volume and heterogeneity of email messages received by users. Current email classification mechanisms predominantly rely on manual rule-based filtering or centralized, server-side machine learning models. These approaches suffer from limited adaptability, lack of user transparency, and substantial privacy concerns due to the external processing of sensitive email content.
-Furthermore, existing systems provide minimal support for client-side, real-time email labeling that operates entirely within the user’s browser environment. The absence of such mechanisms results in increased cognitive load, inefficient inbox management, and reduced user control over data handling and classification logic.
-The core problem addressed in this work is the absence of a privacy-preserving, client-side automated email labeling system that performs real-time classification without transmitting email data to external servers, while maintaining transparency, adaptability, and usability within web-based email interfaces.
+A decentralized, privacy-first intelligence layer for Gmail, leveraging client-side Machine Learning to automate inbox organization without external data leakage.
 
-A privacy-first Chrome extension that automatically classifies and labels Gmail
-emails using client-side machine learning, sender memory, and Gmail DOM
-integration, with no backend and no external services.
+## 1. Problem Statement
 
----
+Modern email management suffers from a **Trilemma of Friction**:
+1.  **Cognitive Overload**: The sheer volume of incoming mail exceeds the user's capacity for manual categorization.
+2.  **Privacy Erosion**: Existing "Smart Inbox" solutions rely on server-side ML, which requires granting third-party servers full access to sensitive, private communication.
+3.  **Static Logic**: Standard filter rules are brittle and fail to adapt to evolving communication patterns without manual maintenance.
 
-## Overview
+Current solutions either compromise on privacy (Server-Side ML) or adaptability (Manual Filters). There is a critical need for a system that provides the intelligence of modern classifiers while maintaining the security of local, client-side processing.
 
-Auto Email Labeler augments the Gmail inbox UI by predicting contextual labels for
-emails in real time. The system operates entirely inside the browser, performing
-feature extraction, inference, and learning locally.
+## 2. Proposed Application Solution
 
-This project focuses on:
-- Gmail DOM reverse-engineering
-- Lightweight ML inference in JavaScript
-- Persistent sender-based learning
-- Privacy-preserving browser extensions
+**Auto Email Labeler** is a Manifest V3-compliant Chrome Extension that implements an autonomous "Intelligence Loop" directly inside the browser. It captures email metadata via the native Gmail API, performs real-time vector-based classification on the user's machine, and overlays intuitive visual labels onto the Gmail interface.
+
+The application achieves this through a **Distributed Browser Architecture**, offloading heavy computations to background processes while maintaining a responsive, "thin" UI layer in the Gmail tab.
 
 ---
 
-## Features
+## 3. Tech Stack
 
-- **Automatic Email Classification**
-  - Predicts labels using subject text and sender metadata
+### Core Runtime
+*   **Manifest V3 (MV3)**: Utilizes Service Workers and declarative permissions for enhanced security and performance.
+*   **JavaScript (ES6+)**: Vanilla JS logic to minimize dependency footprint and maximize execution speed.
 
-- **Client-Side Machine Learning**
-  - No server-side inference
-  - Vocabulary-based vectorization
-  - Centroid similarity scoring
+### Data & Persistence
+*   **IndexedDB (IDB)**: A high-performance, transactional database used to store training datasets, sender memory, and clustering centroids. Unlike `storage.local`, IDB provides the structured querying and volume support necessary for large email datasets.
+*   **Google OAuth2 & Gmail API**: Direct, secure integration for fetching message metadata and applying native Gmail labels.
 
-- **Sender Memory**
-  - Learns recurring sender → label mappings
-  - Improves accuracy over time
+### Processing & Machine Learning
+*   **Chrome Offscreen Documents**: A dedicated document for running heavy, non-blocking computations (TF-IDF vectorization and Centroid rebuilding) that are unsuitable for the ephemeral nature of a Service Worker.
+*   **Custom Vectorization Engine**: A lightweight TF-IDF (Term Frequency-Inverse Document Frequency) implementation for feature extraction.
 
-- **Privacy-First Design**
-  - No third-party network requests or telemetry
-  - Integrates securely with the native **Gmail API** (via Google OAuth) to fetch message metadata
-  - All learned data and AI models stay strictly local to your browser storage
-
-- **Native Gmail UI Integration**
-  - Injects label badges directly into inbox rows
-  - Non-destructive DOM manipulation
+### Visualization & UI
+*   **Chart.js**: Dynamic, canvas-based rendering for the "Label Intelligence Dashboard."
+*   **Vanilla CSS3 (Aesthetic Layer)**: A custom design system featuring glassmorphism, dark mode, and micro-animations for a premium dashboard experience.
 
 ---
 
-## Architecture
+## 4. System Architecture
+
+The system is designed around a **Client-Server model contained entirely within the browser**.
+
+```mermaid
+graph TD
+    subgraph "Gmail Web Interface (Thin Client)"
+        CS[content_script.js] -->|Observe DOM| MB[Message Badges]
+        MB -->|User Override| CS
+    end
+
+    subgraph "Extension Core (Orchestrator)"
+        SW[background.js Service Worker]
+        IDB[(IndexedDB)]
+        OFF[offscreen.js Engine]
+    end
+
+    subgraph "Analytics (Dashboard)"
+        DASH[visualization.js]
+        Charts[Chart.js Engine]
+    end
+
+    %% Data Flow
+    GAP[Gmail API] -->|Sync Metadata| SW
+    SW -->|Persist state| IDB
+    SW -->|Trigger Compute| OFF
+    OFF -->|Rebuild Centroids| IDB
+    CS <-->|RPC Messaging| SW
+    IDB -->|Hydrate| DASH
+    DASH -->|Draw| Charts
 ```
-┌──────────────┐
-│ Gmail Inbox  │
-│    (DOM)     │
-└──────┬───────┘
-       │
-       ▼
-┌─────────────────────┐       ┌──────────────────────┐
-│  content_script.js  │       │     ml_model.js      │
-│ - DOM parsing       │ ◄───► │ - Feature extraction │
-│ - Prediction logic  │       │ - Vocabulary config  │
-│ - UI badge injection│       │ - Centroid inference │
-└──────┬──────────────┘       └──────────┬───────────┘
-       │                                 │
-       ▼                                 ▼
-┌─────────────────────┐       ┌──────────────────────┐
-│    background.js    │ ◄───► │  Gmail API (OAuth)   │
-│ - Model rebuilding  │       │ - Background fetching│
-│ - Sender memory     │       └──────────────────────┘
-│ - Training updates  │
-└──────┬──────────────┘
-       │
-       ▼
-┌─────────────────────┐
-│ Chrome Storage API  │
-│ - Vocabulary        │
-│ - Centroids         │
-│ - Sender history    │
-└─────────────────────┘
-```
----
-
-## Machine Learning Approach
-
-### Feature Extraction
-- Tokenization of:
-  - Email subject
-  - Sender name / domain
-- Incremental vocabulary construction
-
-### Model
-- Centroid-based classifier per label
-- Vector similarity (cosine distance)
-
-### Learning
-- User actions reinforce sender → label associations
-- Model updates incrementally without retraining
-
-> The design prioritizes interpretability, speed, and privacy over heavy models.
 
 ---
 
-## Tech Stack
+## 5. Technical Rationale & Methodologies
 
-- **Language:** JavaScript (ES6+)
-- **Platform:** Chrome Extensions (Manifest V3)
-- **Storage:** Chrome `storage.local`
-- **UI Layer:** Gmail DOM manipulation
-- **ML:** Custom lightweight client-side logic
+### Why IndexedDB?
+We opted for **IndexedDB** over the standard `chrome.storage` API because machine learning requires storing thousands of vectorized email samples. `chrome.storage` has restrictive size limits and lacks the transactional indexing needed to perform fast searches across 2,500+ records in real-time.
+
+### Why Offscreen Processing?
+Manifest V3 Service Workers have a short lifecycle and can be terminated at any time. Heavy ML tasks (like rebuilding a global vocabulary from thousands of emails) take longer than a Service Worker's active window. We use **Offscreen Documents** to maintain a persistent, non-blocking computational environment, ensuring the Gmail UI remains buttery smooth during training phases.
+
+### Why Centroid-Based ML?
+Unlike deep learning models (Transformers/BERT) which are computationally expensive and require heavy assets, we use a **Centroid-Based Similarity Classifier**. 
+*   **Efficiency**: It performs O(k) comparisons where k is the number of labels, making it exceptionally fast for browser inference.
+*   **Adaptability**: The model is "Living." As you manually label an email, the system re-averages the centroid for that label, allowing the model to adapt to your preferences instantly without a global "training" step.
+
+### Why the "Thin Client" Content Script?
+Gmail is a massive, complex Single Page Application (SPA). To prevent performance degradation, `content_script.js` performs zero logic. It simply observes the DOM, sends an RPC message to the background orchestrator, and waits for a "ready-to-render" prediction. This keeps the user's Gmail tab fast and light.
 
 ---
 
-## Project Structure
-```
-auto-email-labeler/
-├── ml_model.js         # Shared TF-IDF, vectorization, and inference logic
-├── background.js       # Model rebuilding, persistence, and Gmail API Sync
-├── content_script.js   # Gmail DOM observation logic & UI badge injection
-├── manifest.json       # Extension configuration (Manifest V3)
-├── popup.html          # Extension popup UI
-├── popup.js            # Popup logic
-├── styles.css          # Badge & popup UI styles
-├── icons/              # Extension icons
-└── LICENSE             # MIT License
-```
+## 6. Implementation & Installation
+
+1.  **Clone the Repo**: `git clone <repo-url>`
+2.  **Load Unpacked**: Go to `chrome://extensions`, enable **Developer Mode**, and click **Load Unpacked**. Select the project folder.
+3.  **Authorize**: Open the extension popup, enable "Background Sync API," and follow the OAuth2 prompt to grant Gmail access.
+4.  **Analyze**: Open the **Label Intelligence Dashboard** via the floating "Auto Labeler" button in Gmail to see your inbox distribution in real-time.
+
 ---
 
-
-## Steps to Implement locally
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/codeswa1/auto-email-labeler.git
-cd auto-email-labeler
-```
-### 2. Load the extension in Chrome
-- Open chrome://extensions
-- Enable Developer mode
-- Click Load unpacked
-- Select the project directory
-
-### 3. Open Gmail
-The extension activates automatically on Gmail inbox pages.
-
-## Security & Privacy
-- No third-party dependencies outside of Google's native Gmail API
-- No analytics or telemetry
-- No email data is sent to external or third-party servers
-- All learned data is stored locally
-
-## Limitations
-- Gmail DOM changes may require selector updates
-- Model is intentionally lightweight
-- Not designed for enterprise-scale automation
-
-## Future Improvements
-- Smarter feature weighting
-- Decay for stale sender associations
-- Export / import learned state
-- Optional user-defined rules
+## 7. Security & Privacy Assurance
+*   **Local Processing**: 0% of your email data is sent to external servers. All classification happens in your browser's RAM.
+*   **Scope Minimalism**: The extension requests only `gmail.readonly` and `gmail.labels` scopes, the absolute minimum required for functionality.
+*   **No Dependency Leakage**: The system is built with zero third-party tracking scripts, ensuring your data remains your data.

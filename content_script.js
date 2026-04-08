@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = {
 
 let settings = { ...DEFAULT_SETTINGS };
 let panelEl = null, panelVisible = false, debugLog = [];
-let pendingRowProcessing = false;
+let rowObserver = null;
 const labelColors = {};
 
 // ==============================
@@ -215,7 +215,13 @@ function applyManualLabel(row, newLabel, badge) {
   const subject = subjectSpan.innerText;
   const fullText = row.querySelector(".y6")?.innerText || "";
   const snippet = fullText.startsWith(subject) ? fullText.slice(subject.length).replace(/^-?\s*/, "") : "";
-  const messageId = row.getAttribute("data-legacy-message-id") || row.getAttribute("data-legacy-thread-id");
+    const checkbox = row.querySelector('div[role="checkbox"]');
+  const messageId = checkbox?.getAttribute("data-id") || 
+                    row.getAttribute("data-thread-id") || 
+                    row.getAttribute("data-legacy-last-message-id") ||
+                    row.getAttribute("data-legacy-thread-id") || 
+                    row.getAttribute("data-legacy-message-id");
+  const isUnread = row.classList.contains("zE");
 
   badge.textContent = newLabel;
   badge.style.background = getOrCreateLabelColor(newLabel);
@@ -231,7 +237,7 @@ function applyManualLabel(row, newLabel, badge) {
     return;
   }
 
-  chrome.runtime.sendMessage({ type: "APPLY_LABEL", sender, subject, snippet, newLabel, messageId }, () => {
+  chrome.runtime.sendMessage({ type: "APPLY_LABEL", sender, subject, snippet, newLabel, messageId, isUnread }, () => {
     if (chrome.runtime.lastError) {
       console.warn("Extension context lost, refresh the page.");
       return;
@@ -245,14 +251,12 @@ function applyManualLabel(row, newLabel, badge) {
       if (sContainer && sContainer.innerText === sender) {
         const b = r.querySelector(".auto-email-label-badge-container");
         if (b) {
-          b.remove(); // remove old badge
-          delete r.dataset.autoLabeled; // remove processing lock
+           b.remove(); // remove old badge
+           delete r.dataset.autoLabeled; // remove processing lock
+           processSingleRow(r); // Instant re-predict
         }
       }
     });
-    // Trigger loop instantly to fetch new predictions
-    pendingRowProcessing = false;
-    requestAnimationFrame(processInboxRows);
   });
 }
 
@@ -260,28 +264,49 @@ function applyManualLabel(row, newLabel, badge) {
 // OPTIMIZED OBSERVER & PROCESSING
 // ==============================
 function startOptimizedObserver() {
-  const target = document.querySelector('table.F.cf.zt') || document.body;
-  new MutationObserver(() => {
-    if (!pendingRowProcessing) {
-      pendingRowProcessing = true;
-      requestAnimationFrame(processInboxRows);
-    }
-  }).observe(target, { childList: true, subtree: true });
+  rowObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        processSingleRow(entry.target);
+      }
+    });
+  }, { rootMargin: "200px" });
 
-  setInterval(() => { if (!pendingRowProcessing) requestAnimationFrame(processInboxRows); }, 3000);
+  const target = document.querySelector('table.F.cf.zt') || document.body;
+  
+  const reObserve = () => {
+    document.querySelectorAll("tr.zA:not([data-observed])").forEach(row => {
+      row.dataset.observed = "true";
+      rowObserver.observe(row);
+    });
+  };
+
+  new MutationObserver((mutations) => {
+    reObserve();
+    // If attributes changed, a row might have been updated (read/selected)
+    // and Gmail may have wiped our badge.
+    mutations.forEach(m => {
+      if (m.type === "attributes" && m.target?.classList?.contains("zA")) {
+        processSingleRow(m.target);
+      }
+    });
+  }).observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+
+  // Listen for clicks on rows to catch instant Gmail state changes
+  document.addEventListener("click", (e) => {
+    const row = e.target.closest("tr.zA");
+    if (row) {
+      // Small delay to let Gmail's own click handlers finish their DOM swaps
+      setTimeout(() => processSingleRow(row), 50);
+    }
+  }, true);
+
+  setInterval(reObserve, 3000);
+  reObserve();
 }
 
-function processInboxRows() {
-  pendingRowProcessing = false;
-  // tr.zA matches ALL email rows (read and unread) across all folders
-  const rows = document.querySelectorAll("tr.zA"); 
-  
-  rows.forEach(row => {
-    // If Gmail destroys our badge during a re-render, this will be falsy, 
-    // allowing us to re-fetch and re-attach it accurately.
+function processSingleRow(row) {
     if (row.querySelector(".auto-email-label-badge-container")) return; 
-    
-    // Prevent overlapping network requests for the exact same row
     if (row.dataset.autoLabeled === "processing") return; 
     
     const subjectSpan = row.querySelector(".y6 span");
@@ -289,40 +314,52 @@ function processInboxRows() {
     const senderSpan = senderContainer?.querySelector("span");
     
     if (!subjectSpan || !senderContainer || !senderSpan) return;
-    row.dataset.autoLabeled = "processing"; // Mark as being processed
+    row.dataset.autoLabeled = "processing"; 
 
     const sender = senderSpan.innerText;
     const subject = subjectSpan.innerText;
     const fullText = row.querySelector(".y6")?.innerText || "";
     const snippet = fullText.startsWith(subject) ? fullText.slice(subject.length).replace(/^-?\s*/, "") : "";
-    const messageId = row.getAttribute("data-legacy-message-id") || row.getAttribute("data-legacy-thread-id");
+    
+    // Robust ID extraction for Gmail
+    const checkbox = row.querySelector('div[role="checkbox"]');
+    const messageId = checkbox?.getAttribute("data-id") || 
+                      row.getAttribute("data-thread-id") || 
+                      row.getAttribute("data-legacy-last-message-id") ||
+                      row.getAttribute("data-legacy-thread-id") || 
+                      row.getAttribute("data-legacy-message-id");
+    
+    const isUnread = row.classList.contains("zE");
 
-    // Fix for: "Extension context invalidated" development error
     if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) {
-      console.warn("Auto Email Labeler context lost. Please refresh the Gmail tab.");
+      // Gracefully shut down to stop console spam
+      if (rowObserver) {
+        rowObserver.disconnect();
+        rowObserver = null;
+      }
+      console.warn("Auto Email Labeler: Extension updated or reloaded. Please refresh this tab to re-enable labeling.");
       return;
     }
 
     try {
-      chrome.runtime.sendMessage({ type: "PREDICT", sender, subject, snippet, messageId }, (prediction) => {
+      chrome.runtime.sendMessage({ type: "PREDICT", sender, subject, snippet, messageId, isUnread }, (prediction) => {
         if (chrome.runtime.lastError) {
           delete row.dataset.autoLabeled;
           return;
         }
       
-      delete row.dataset.autoLabeled; // clear the processing lock
-      
-      const container = createBadge(prediction || { label: "AUTO", confidence: 0, isGraduated: false }, row);
-      if (container && !row.querySelector(".auto-email-label-badge-container")) {
-        senderContainer.parentElement.insertBefore(container, senderContainer);
-        debugLog.push(`${sender} | ${subject} -> ${prediction?.label || "AUTO"}`);
-        if(debugLog.length > 20) debugLog.shift();
-      }
+        delete row.dataset.autoLabeled;
+        
+        const container = createBadge(prediction || { label: "AUTO", confidence: 0, isGraduated: false }, row);
+        if (container && !row.querySelector(".auto-email-label-badge-container")) {
+          senderContainer.parentElement.insertBefore(container, senderContainer);
+          debugLog.push(`${sender} | ${subject} -> ${prediction?.label || "AUTO"}`);
+          if(debugLog.length > 20) debugLog.shift();
+        }
       });
     } catch (e) {
       delete row.dataset.autoLabeled;
     }
-  });
 }
 
 // ==============================

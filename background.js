@@ -13,6 +13,8 @@ let settings = { autoApply: true, senderBoost: true, gmailApiEnabled: false };
 let labelCache = null;
 const nativelyApplied = new Set();
 
+let initPromise = init();
+
 // ==============================
 // INIT
 // ==============================
@@ -33,7 +35,6 @@ async function init() {
 
   chrome.alarms.create("syncGmail", { periodInMinutes: 1 });
 }
-init();
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "syncGmail" && settings.gmailApiEnabled) {
@@ -53,33 +54,39 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // ==============================
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "PREDICT") {
-    handlePredict(msg).then(sendResponse);
+    initPromise.then(() => handlePredict(msg)).then(sendResponse);
     return true; // async
   }
   if (msg.type === "APPLY_LABEL") {
-    handleApplyLabel(msg).then(sendResponse);
+    initPromise.then(() => handleApplyLabel(msg)).then(sendResponse);
     return true;
   }
   if (msg.type === "SAVE_SETTINGS") {
-    chrome.storage.sync.set({ settings: msg.settings });
-    settings = msg.settings;
-    sendResponse({ success: true });
+    initPromise.then(() => {
+      chrome.storage.sync.set({ settings: msg.settings });
+      settings = msg.settings;
+      sendResponse({ success: true });
+    });
+    return true;
   }
   if (msg.type === "FETCH_GMAIL") {
-    fetchGmailEmails(true).then(() => sendResponse({ success: true })).catch(e => sendResponse({ error: e.message }));
+    initPromise.then(() => fetchGmailEmails(true)).then(() => sendResponse({ success: true })).catch(e => sendResponse({ error: e.message }));
     return true;
   }
   if (msg.type === "GET_STATS") {
-    const uniqueLabels = new Set();
-    Object.keys(centroids).forEach(l => uniqueLabels.add(l));
-    Array.from(emailLabelMap.values()).forEach(v => {
-      if(v && v.label && v.label !== "AUTO") uniqueLabels.add(v.label);
-    });
-    trainingDataset.forEach(d => {
-      if(d && d.label && d.label !== "AUTO") uniqueLabels.add(d.label);
-    });
+    initPromise.then(() => {
+      const uniqueLabels = new Set();
+      Object.keys(centroids).forEach(l => uniqueLabels.add(l));
+      Array.from(emailLabelMap.values()).forEach(v => {
+        if(v && v.label && v.label !== "AUTO") uniqueLabels.add(v.label);
+      });
+      trainingDataset.forEach(d => {
+        if(d && d.label && d.label !== "AUTO") uniqueLabels.add(d.label);
+      });
 
-    sendResponse({ samples: trainingDataset.length, vocab: vocabulary.length, labels: Array.from(uniqueLabels).join(", "), queue: offlineQueue.length });
+      sendResponse({ samples: trainingDataset.length, vocab: vocabulary.length, labels: Array.from(uniqueLabels).join(", "), queue: offlineQueue.length });
+    });
+    return true;
   }
 });
 
@@ -90,16 +97,37 @@ async function handlePredict(msg) {
      result = emailLabelMap.get(key);
      
      // Retroactively guarantee the graduation flag checks out on loaded cache entries!
-     const senderKey = normalize(msg.sender);
-     if (senderMemory[senderKey]) {
-       const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
-       result.isGraduated = totalApprovals >= 3;
-     } else {
-       result.isGraduated = false;
-     }
+      const senderKey = normalize(msg.sender);
+      if (senderMemory[senderKey]) {
+        let totalApprovals = 0;
+        Object.values(senderMemory[senderKey]).forEach(val => {
+          totalApprovals += (val && typeof val === 'object' ? val.count : val);
+        });
+        result.isGraduated = totalApprovals >= 3;
+      } else {
+        result.isGraduated = false;
+      }
   } else {
      // Uses memory objects built by IDB/Init, now passes snippet payload explicitly
      result = await predictLabel(msg.sender, msg.subject, msg.snippet || "", settings);
+     
+     // Store the message metadata in the dataset for the dashboard (Avoid duplicates!)
+     const exists = trainingDataset.some(d => d.messageId === msg.messageId);
+     if (!exists) {
+       trainingDataset.push({
+         messageId: msg.messageId,
+         sender: msg.sender,
+         subject: msg.subject,
+         snippet: msg.snippet || "",
+         isUnread: msg.isUnread || false,
+         label: "AUTO",
+         timestamp: Date.now(),
+         source: "gmail-predict"
+       });
+       if (trainingDataset.length > MAX_DATASET) trainingDataset.shift();
+       saveStoreData(["dataset"]);
+     }
+
      emailLabelMap.set(key, result);
      saveStoreData(["emailLabelMap"]);
   }
@@ -121,8 +149,14 @@ async function handleApplyLabel(msg) {
   });
   
   senderMemory[senderKey] ??= {};
-  senderMemory[senderKey][msg.newLabel] = (senderMemory[senderKey][msg.newLabel] || 0) + 1;
-  const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
+  let currentObj = senderMemory[senderKey][msg.newLabel];
+  let newCount = (currentObj && typeof currentObj === 'object' ? currentObj.count : (currentObj || 0)) + 1;
+  senderMemory[senderKey][msg.newLabel] = { count: newCount, lastUpdated: Date.now() };
+  
+  let totalApprovals = 0;
+  Object.values(senderMemory[senderKey]).forEach(val => {
+    totalApprovals += (val && typeof val === 'object' ? val.count : val);
+  });
   
   // Directly set the specific corrected subject key to the explicit label WITH the grad flag
   emailLabelMap.set(key, { label: msg.newLabel, confidence: 1, isGraduated: totalApprovals >= 3 });
@@ -132,7 +166,16 @@ async function handleApplyLabel(msg) {
   }
 
   if (trainingDataset.length > MAX_DATASET) trainingDataset.shift();
-  trainingDataset.push({ sender: msg.sender, subject: msg.subject, snippet: msg.snippet || "", label: msg.newLabel, timestamp: Date.now(), source: "user-corrected" });
+  trainingDataset.push({ 
+    messageId: msg.messageId,
+    sender: msg.sender, 
+    subject: msg.subject, 
+    snippet: msg.snippet || "", 
+    isUnread: msg.isUnread || false,
+    label: msg.newLabel, 
+    timestamp: Date.now(), 
+    source: "user-corrected" 
+  });
 
   await saveStoreData(["senderMemory", "dataset", "emailLabelMap"]);
   triggerOffscreenRebuild();
@@ -298,8 +341,8 @@ async function fetchGmailEmails(interactive = false) {
       saveStoreData(["historyId"]);
 
       const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-      url.searchParams.set("maxResults", "10"); // just a baseline
-      url.searchParams.set("q", "is:unread");
+      url.searchParams.set("maxResults", "50"); // Increased baseline for complete account mapping
+      // Removed "is:unread" to fetch from all folders and labels
       const mRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
       const mData = await mRes.json();
       for (const m of mData.messages || []) offlineQueue.push(m.id);
@@ -354,11 +397,14 @@ async function processOfflineQueue() {
       const senderDecoded = decodeMime(headersObj.From || "");
       const subjectDecoded = decodeMime(headersObj.Subject || "");
       const snippet = msgData.snippet || "";
+      const isUnread = msgData.labelIds ? msgData.labelIds.includes("UNREAD") : false;
 
       trainingDataset.push({
+        messageId: id,
         sender: senderDecoded,
         subject: subjectDecoded,
         snippet: snippet,
+        isUnread: isUnread,
         label: "AUTO", timestamp: Date.now(), source: "gmail-auto"
       });
       if (settings.autoApply) {

@@ -241,4 +241,94 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // 4. Recent Activity & Search Rendering
+  const activityBody = document.getElementById('activityBody');
+  const searchInput = document.getElementById('emailSearch');
+  const resultCount = document.getElementById('resultCount');
+  const dropdown = document.getElementById('searchResultsDropdown');
+
+  function renderActivityTable(filterText = '') {
+    const query = (filterText || '').toLowerCase().trim();
+    const filtered = dataset.filter(item => {
+      const sdr = (item.sender || '').toLowerCase();
+      const sub = (item.subject || '').toLowerCase();
+      return sdr.includes(query) || sub.includes(query);
+    }).sort((a, b) => b.timestamp - a.timestamp);
+
+    resultCount.textContent = `${filtered.length} items`;
+    activityBody.innerHTML = '';
+
+    if (filtered.length === 0) {
+      activityBody.innerHTML = `<tr><td colspan="5" style="text-align:center; opacity:0.5; padding: 2rem;">No emails found matching "${filterText}".</td></tr>`;
+      return;
+    }
+
+    filtered.forEach(email => {
+      const tr = document.createElement('tr');
+      const d = new Date(email.timestamp);
+      const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      
+      const statusLabel = email.isUnread ? 'Unread' : 'Read';
+      const statusClass = email.isUnread ? 'unread' : 'read';
+      
+      tr.innerHTML = `
+        <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
+        <td style="font-weight: 500;">${email.sender}</td>
+        <td style="opacity: 0.9;">${email.subject}</td>
+        <td style="opacity: 0.7; font-size: 0.8rem; white-space: nowrap;">${dateStr}</td>
+      `;
+      activityBody.appendChild(tr);
+    });
+  }
+
+  // Initial render
+  renderActivityTable();
+
+  // Search & Dropdown listener
+  searchInput.addEventListener('input', (e) => {
+    const val = e.target.value;
+    renderActivityTable(val);
+    
+    if (!val.trim()) {
+      dropdown.classList.remove('active');
+      return;
+    }
+
+    // Dropdown matches (Top 5)
+    const matches = dataset.filter(item => 
+      (item.sender || '').toLowerCase().includes(val.toLowerCase()) || 
+      (item.subject || '').toLowerCase().includes(val.toLowerCase())
+    ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 5);
+
+    if (matches.length > 0) {
+      dropdown.innerHTML = '';
+      matches.forEach(email => {
+        const d = new Date(email.timestamp);
+        const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        
+        const item = document.createElement('div');
+        item.className = 'result-item';
+        
+        item.innerHTML = `
+          <div class="result-header">
+            <span class="result-sender">${email.sender}</span>
+            <span class="result-date">${dateStr}</span>
+          </div>
+          <div class="result-subject">${email.subject}</div>
+        `;
+        
+        dropdown.appendChild(item);
+      });
+      dropdown.classList.add('active');
+    } else {
+      dropdown.classList.remove('active');
+    }
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.classList.remove('active');
+    }
+  });
 });

@@ -16,6 +16,14 @@
       <p>Visualizing local ML model patterns and training data distribution.</p>
     </header>
 
+    <div class="search-section">
+      <div class="search-container">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="emailSearch" placeholder="Search by sender or subject..." autocomplete="off">
+        <div id="searchResultsDropdown" class="search-results-dropdown"></div>
+      </div>
+    </div>
+
     <div class="stats-row" id="statsRow">
       <!-- Quick stats loaded via JS -->
     </div>
@@ -39,6 +47,28 @@
       <h2>Label Velocity (Time-Series Activity)</h2>
       <div class="canvas-wrapper" style="min-height: 350px;">
         <canvas id="lineChart"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card" style="margin-top: 2rem;">
+      <div class="card-header-flex">
+        <h2>Recent Activity & Search Results</h2>
+        <span id="resultCount" class="badge">0 items</span>
+      </div>
+      <div class="activity-table-container">
+        <table id="activityTable">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Status</th>
+              <th style="width: 250px;">Sender ID</th>
+              <th>Subject Line</th>
+              <th style="width: 180px;">Date / Time</th>
+            </tr>
+          </thead>
+          <tbody id="activityBody">
+            <!-- Data injected via JS -->
+          </tbody>
+        </table>
       </div>
     </div>
   </div>

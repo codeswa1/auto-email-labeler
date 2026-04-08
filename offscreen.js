@@ -24,7 +24,4 @@ async function runRebuild(settings) {
   await idb.set('vocabulary', window.vocabulary);
   await idb.set('idf', window.idf);
   await idb.set('centroids', window.centroids);
-  if (settings && settings.ollamaEnabled) {
-    await idb.set('trainingDataset', window.trainingDataset); // Persist cached vectors
-  }
 }

@@ -1,5 +1,5 @@
 // ml_model.js
-// Dual-engine Model: TF-IDF vs Semantic Ollama Embeddings
+// Single-engine Model: TF-IDF
 
 var MAX_DATASET = 2000;
 var trainingDataset = [];
@@ -11,6 +11,20 @@ var debugLog = [];
 
 function normalize(text){ return text?text.toLowerCase().replace(/[^a-z0-9 ]+/g," ").trim():""; }
 function tokenize(text){ return normalize(text).split(" ").filter(Boolean); }
+function getTokens(sender, subject, snippet="") {
+  const senderT = tokenize(sender).map(t => "sdr_" + t);
+  const subjT = tokenize(subject).map(t => "sub_" + t);
+  const snipT = tokenize(snippet).map(t => "snp_" + t);
+  return [...senderT, ...subjT, ...snipT];
+}
+function getDecayedCount(memoryValue) {
+  if (typeof memoryValue === 'number') return memoryValue;
+  if (memoryValue && typeof memoryValue === 'object') {
+    const daysPassed = (Date.now() - (memoryValue.lastUpdated || Date.now())) / (1000 * 60 * 60 * 24);
+    return memoryValue.count * Math.pow(0.5, daysPassed / 120);
+  }
+  return 0;
+}
 
 function cosineSimilarity(a, b) {
   let dot=0,na=0,nb=0;
@@ -21,30 +35,11 @@ function cosineSimilarity(a, b) {
 }
 
 // =======================
-// OLLAMA API
-// =======================
-async function getOllamaEmbedding(text, url, model) {
-  try {
-    const res = await fetch(`${url}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt: text })
-    });
-    if (!res.ok) throw new Error("Ollama fetching error");
-    const data = await res.json();
-    return data.embedding;
-  } catch (err) {
-    console.error("Local Ollama API Error:", err);
-    return []; // Empty vector essentially forces a 0% match
-  }
-}
-
-// =======================
 // TF-IDF MATH
 // =======================
 function buildVocabulary(){
   const set = new Set();
-  trainingDataset.forEach(d => tokenize(d.sender+" "+d.subject).forEach(t=>set.add(t)));
+  trainingDataset.forEach(d => getTokens(d.sender, d.subject, d.snippet || "").forEach(t=>set.add(t)));
   vocabulary = Array.from(set);
 }
 
@@ -52,13 +47,13 @@ function computeIDF(){
   idf = {};
   vocabulary.forEach(term => {
     let count = 0;
-    trainingDataset.forEach(d => { if(tokenize(d.sender+" "+d.subject).includes(term)) count++; });
+    trainingDataset.forEach(d => { if(getTokens(d.sender, d.subject, d.snippet || "").includes(term)) count++; });
     idf[term] = Math.log(trainingDataset.length / (1+count));
   });
 }
 
-function tfIdfVectorize(text) {
-  const tokens = tokenize(text);
+function tfIdfVectorize(sender, subject, snippet="") {
+  const tokens = getTokens(sender, subject, snippet);
   return vocabulary.map(t => tokens.includes(t)?idf[t]||0:0);
 }
 
@@ -67,15 +62,8 @@ function tfIdfVectorize(text) {
 // =======================
 
 // Awaitable predict instead of sync
-async function predictLabel(sender, subject, settings) {
-  const text = sender + " " + subject;
-  let vec = [];
-  
-  if (settings.ollamaEnabled && settings.ollamaUrl && settings.ollamaModel) {
-    vec = await getOllamaEmbedding(text, settings.ollamaUrl, settings.ollamaModel);
-  } else {
-    vec = tfIdfVectorize(text);
-  }
+async function predictLabel(sender, subject, snippet, settings) {
+  let vec = tfIdfVectorize(sender, subject, snippet);
 
   const senderKey = normalize(sender);
   let best = { label: "AUTO", confidence: 0 };
@@ -85,24 +73,39 @@ async function predictLabel(sender, subject, settings) {
       if (!centroid || centroid.length === 0 || centroid.length !== vec.length) return; // Mismatched vector architectures
       
       let score = cosineSimilarity(vec, centroid);
-      if (settings.senderBoost && senderMemory[senderKey]?.[label]) score += 0.15;
+      let memDecayed = settings.senderBoost && senderMemory[senderKey]?.[label] ? getDecayedCount(senderMemory[senderKey][label]) : 0;
+      if (memDecayed > 0) score += 0.15; // Give boost if some memory exists
       if (score > best.confidence) best = { label, confidence: Math.min(score, 1) };
     });
   }
 
   let isGraduated = false;
+  let bestSenderOverride = null;
+  
   if (senderMemory[senderKey]) {
-    // If the user has manually corrected or approved this sender 3 or more times
-    const totalApprovals = Object.values(senderMemory[senderKey]).reduce((sum, count) => sum + count, 0);
+    let totalApprovals = 0;
+    let maxDecayed = 0;
+
+    Object.entries(senderMemory[senderKey]).forEach(([lbl, val]) => {
+      const decayed = getDecayedCount(val);
+      totalApprovals += decayed;
+      if (decayed > maxDecayed) {
+        maxDecayed = decayed;
+        bestSenderOverride = lbl;
+      }
+    });
+
     if (totalApprovals >= 3) {
       isGraduated = true;
     }
     
-    // As Architect's rule: if they strictly have a specific preferred label over 2 times, bypass TF-IDF totally to prevent regression
-    const bestSenderOverride = Object.entries(senderMemory[senderKey]).sort((a,b)=>b[1]-a[1])[0];
-    if (bestSenderOverride && bestSenderOverride[1] >= 2) {
-       best = { label: bestSenderOverride[0], confidence: 1.0 };
+    if (bestSenderOverride && maxDecayed >= 2) {
+       best = { label: bestSenderOverride, confidence: 1.0 };
     }
+  }
+  
+  if (best.confidence < 0.35 && !isGraduated && (!bestSenderOverride || getDecayedCount(senderMemory[senderKey]?.[bestSenderOverride]) < 2)) {
+     best.label = "AUTO";
   }
   
   best.isGraduated = isGraduated;
@@ -119,18 +122,7 @@ async function rebuildCentroids(settings) {
   
   for (let i = 0; i < trainingDataset.length; i++) {
     const d = trainingDataset[i];
-    const text = normalize(d.sender) + " " + normalize(d.subject) + " " + normalize(d.snippet || "");
-    
-    let vec = [];
-    if (settings.ollamaEnabled) {
-      // Re-use cached vector if it was already fetched to save API quotas and time
-      if (!d.ollamaVector) {
-        d.ollamaVector = await getOllamaEmbedding(text, settings.ollamaUrl, settings.ollamaModel);
-      }
-      vec = d.ollamaVector;
-    } else {
-      vec = tfIdfVectorize(text);
-    }
+    let vec = tfIdfVectorize(d.sender, d.subject, d.snippet || "");
     
     if (vec.length > 0 && d.label !== "AUTO") {
       grouped[d.label] ??= []; 
@@ -155,9 +147,7 @@ async function rebuildCentroids(settings) {
 
 // Exposed rebuild method. Run predominantly by offscreen.js
 async function rebuildModel(settings) {
-  if (!settings.ollamaEnabled) {
-    buildVocabulary();
-    computeIDF();
-  }
+  buildVocabulary();
+  computeIDF();
   await rebuildCentroids(settings);
 }

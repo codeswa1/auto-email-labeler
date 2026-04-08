@@ -14,9 +14,7 @@
   ],
 
   "host_permissions": [
-    "*://mail.google.com/*",
-    "http://localhost:11434/*",
-    "http://127.0.0.1:11434/*"
+    "*://mail.google.com/*"
   ],
 
   "oauth2": {

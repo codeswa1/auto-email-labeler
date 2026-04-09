@@ -12,6 +12,41 @@ let rowObserver = null;
 const labelColors = {};
 
 // ==============================
+// CONTEXT ROBUSTNESS
+// ==============================
+function isContextValid() {
+  return typeof chrome !== "undefined" && !!chrome.runtime && !!chrome.runtime.id;
+}
+
+function safeSendMessage(message, callback) {
+  if (!isContextValid()) {
+    console.warn("Auto Email Labeler: Extension context lost. Please refresh the page.");
+    if (rowObserver) { rowObserver.disconnect(); rowObserver = null; }
+    return false;
+  }
+  try {
+    chrome.runtime.sendMessage(message, response => {
+      if (chrome.runtime.lastError) {
+        // Specifically don't console.error if it's a context invalidated error to keep console clean
+        if (!chrome.runtime.lastError.message.includes("context invalidated")) {
+          console.error("SendMessage error:", chrome.runtime.lastError.message);
+        }
+      }
+      if (callback) callback(response);
+    });
+    return true;
+  } catch (e) {
+    if (e.message.includes("context invalidated")) {
+      console.warn("Auto Email Labeler: Context lost, stopping activity.");
+      if (rowObserver) { rowObserver.disconnect(); rowObserver = null; }
+    } else {
+      console.error("SafeSendMessage exception:", e);
+    }
+    return false;
+  }
+}
+
+// ==============================
 // INIT & SETTINGS
 // ==============================
 chrome.storage.sync.get({ settings: DEFAULT_SETTINGS }, sync => {
@@ -27,13 +62,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 function saveSettings(newSettings) {
-  try {
-    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: newSettings }, () => {
-      if (chrome.runtime.lastError) console.error("SAVE_SETTINGS error:", chrome.runtime.lastError);
-    });
-  } catch (e) {
-    console.warn("Could not save settings, extension context likely lost.", e);
-  }
+  safeSendMessage({ type: "SAVE_SETTINGS", settings: newSettings });
 }
 
 // ==============================
@@ -120,7 +149,8 @@ function showLabelOverrideDropdown(badge, rowElement) {
   dropdown.onmousedown = e => e.stopPropagation();
 
   // Ask background for current labels
-  chrome.runtime.sendMessage({ type: "GET_STATS" }, response => {
+  safeSendMessage({ type: "GET_STATS" }, response => {
+    if (!response) { dropdown.remove(); return; }
     const header = document.createElement("div");
     header.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:2px 4px 6px 4px; border-bottom:1px solid #eee; margin-bottom:4px;";
     
@@ -215,7 +245,16 @@ function applyManualLabel(row, newLabel, badge) {
   const subject = subjectSpan.innerText;
   const fullText = row.querySelector(".y6")?.innerText || "";
   const snippet = fullText.startsWith(subject) ? fullText.slice(subject.length).replace(/^-?\s*/, "") : "";
-    const checkbox = row.querySelector('div[role="checkbox"]');
+  
+  const dateCell = row.querySelector(".xW");
+  // PRIORITIZE Title (Full Date) -> ARIA (Medium Date) -> Text (Summary Date)
+  let sentDate = "";
+  if (dateCell) {
+    const span = dateCell.querySelector("span");
+    sentDate = span?.getAttribute("title") || span?.getAttribute("aria-label") || dateCell.innerText || "";
+  }
+
+  const checkbox = row.querySelector('div[role="checkbox"]');
   const messageId = checkbox?.getAttribute("data-id") || 
                     row.getAttribute("data-thread-id") || 
                     row.getAttribute("data-legacy-last-message-id") ||
@@ -232,17 +271,7 @@ function applyManualLabel(row, newLabel, badge) {
     });
   }
 
-  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) {
-    console.warn("Context lost, please refresh Gmail.");
-    return;
-  }
-
-  chrome.runtime.sendMessage({ type: "APPLY_LABEL", sender, subject, snippet, newLabel, messageId, isUnread }, () => {
-    if (chrome.runtime.lastError) {
-      console.warn("Extension context lost, refresh the page.");
-      return;
-    }
-    
+  safeSendMessage({ type: "APPLY_LABEL", sender, subject, snippet, newLabel, messageId, isUnread, sentDate }, () => {
     // Wipe all OTHER rows' badges for the exact same sender, forcing an instant re-prediction!
     const rows = document.querySelectorAll("tr.zA");
     rows.forEach(r => {
@@ -330,36 +359,25 @@ function processSingleRow(row) {
                       row.getAttribute("data-legacy-message-id");
     
     const isUnread = row.classList.contains("zE");
-
-    if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) {
-      // Gracefully shut down to stop console spam
-      if (rowObserver) {
-        rowObserver.disconnect();
-        rowObserver = null;
-      }
-      console.warn("Auto Email Labeler: Extension updated or reloaded. Please refresh this tab to re-enable labeling.");
-      return;
+    const dateCell = row.querySelector(".xW");
+    let sentDate = "";
+    if (dateCell) {
+      const span = dateCell.querySelector("span");
+      sentDate = span?.getAttribute("title") || span?.getAttribute("aria-label") || dateCell.innerText || "";
     }
 
-    try {
-      chrome.runtime.sendMessage({ type: "PREDICT", sender, subject, snippet, messageId, isUnread }, (prediction) => {
-        if (chrome.runtime.lastError) {
-          delete row.dataset.autoLabeled;
-          return;
-        }
-      
-        delete row.dataset.autoLabeled;
-        
-        const container = createBadge(prediction || { label: "AUTO", confidence: 0, isGraduated: false }, row);
-        if (container && !row.querySelector(".auto-email-label-badge-container")) {
-          senderContainer.parentElement.insertBefore(container, senderContainer);
-          debugLog.push(`${sender} | ${subject} -> ${prediction?.label || "AUTO"}`);
-          if(debugLog.length > 20) debugLog.shift();
-        }
-      });
-    } catch (e) {
+    if (!isContextValid()) return;
+
+    safeSendMessage({ type: "PREDICT", sender, subject, snippet, messageId, isUnread, sentDate }, (prediction) => {
       delete row.dataset.autoLabeled;
-    }
+      
+      const container = createBadge(prediction || { label: "AUTO", confidence: 0, isGraduated: false }, row);
+      if (container && !row.querySelector(".auto-email-label-badge-container")) {
+        senderContainer.parentElement.insertBefore(container, senderContainer);
+        debugLog.push(`${sender} | ${subject} -> ${prediction?.label || "AUTO"}`);
+        if(debugLog.length > 20) debugLog.shift();
+      }
+    });
 }
 
 // ==============================
@@ -398,16 +416,12 @@ function initFloatingButton() {
 function togglePanel() { panelVisible ? closePanel() : openPanel(); }
 
 function openPanel() {
-  if (panelEl) return; panelVisible = true;
   panelEl = document.createElement("div");
   panelEl.style.cssText = `position:fixed;top:${(settings.buttonPos?.top || 120)+40}px;left:${settings.buttonPos?.left || window.innerWidth - 140}px;
     background:#fff;border:1px solid #ccc;padding:12px;width:320px;font-size:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2);border-radius:8px;font-family:sans-serif;`;
   
-  try {
-    chrome.runtime.sendMessage({ type: "GET_STATS" }, stats => {
-      if (chrome.runtime.lastError) console.error("GET_STATS error:", chrome.runtime.lastError);
-      
-      panelEl.innerHTML = `
+  const success = safeSendMessage({ type: "GET_STATS" }, stats => {
+    panelEl.innerHTML = `
       <b style="font-size:14px;">Auto Email Labeler (Thin Client)</b><hr style="margin:8px 0;"/>
       <label style="display:block;margin-bottom:4px"><input type="checkbox" id="autoApply"> Auto Apply Labels natively in Gmail</label>
       <label style="display:block;margin-bottom:4px"><input type="checkbox" id="senderBoost"> Sender Memory Boost</label>
@@ -432,16 +446,31 @@ function openPanel() {
         settings[mapKey] = el.checked; 
         saveSettings(settings);
         if (key === "gmailApi" && el.checked) {
-          chrome.runtime.sendMessage({ type: "FETCH_GMAIL" });
+          safeSendMessage({ type: "FETCH_GMAIL" });
         }
       };
     });
+    
+    const vizBtn = panelEl.querySelector("#vizBtn");
+    if (vizBtn) {
+      vizBtn.onclick = () => {
+        if (!isContextValid()) {
+          alert("Extension context lost due to a reload or update. Please refresh the Gmail page.");
+          closePanel();
+          const mainBtn = document.getElementById("autoLabelerBtn");
+          if (mainBtn) mainBtn.style.opacity = "0.5"; 
+          return;
+        }
+        window.open(chrome.runtime.getURL("visualization.html"), "_blank");
+      };
+    }
 
-    panelEl.querySelector("#vizBtn").onclick = () => window.open(chrome.runtime.getURL("visualization.html"), "_blank");
-    panelEl.querySelector("#closeBtn").onclick = closePanel;
-    });
-  } catch (error) {
-    console.error("Extension context invalidated:", error);
+    const closeBtn = panelEl.querySelector("#closeBtn");
+    if (closeBtn) closeBtn.onclick = closePanel;
+  });
+
+  if (!success) {
+    console.warn("Auto Email Labeler: Connection lost during panel init.");
     alert("Extension connection lost. Please refresh the Gmail tab.");
     closePanel();
   }

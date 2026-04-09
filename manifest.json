@@ -54,6 +54,7 @@
         "visualization.css",
         "visualization.js",
         "Chart.min.js",
+        "d3.min.js",
         "idb_store.js"
       ],
       "matches": [

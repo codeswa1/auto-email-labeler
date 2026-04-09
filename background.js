@@ -111,17 +111,31 @@ async function handlePredict(msg) {
      // Uses memory objects built by IDB/Init, now passes snippet payload explicitly
      result = await predictLabel(msg.sender, msg.subject, msg.snippet || "", settings);
      
-     // Store the message metadata in the dataset for the dashboard (Avoid duplicates!)
-     const exists = trainingDataset.some(d => d.messageId === msg.messageId);
-     if (!exists) {
+     // Store or Heal the message metadata
+     const existingIndex = trainingDataset.findIndex(d => d.messageId === msg.messageId);
+     if (existingIndex !== -1) {
+       // HEALING logic: Update missing date OR upgrade 'AUTO' to actual prediction
+       let changed = false;
+       if (!trainingDataset[existingIndex].sentDate && msg.sentDate) {
+         trainingDataset[existingIndex].sentDate = msg.sentDate;
+         changed = true;
+       }
+       if (trainingDataset[existingIndex].label === "AUTO" && result.label && result.label !== "AUTO") {
+         trainingDataset[existingIndex].label = result.label;
+         changed = true;
+       }
+       if (changed) saveStoreData(["dataset"]);
+     } else {
+       // NEW record
        trainingDataset.push({
          messageId: msg.messageId,
          sender: msg.sender,
          subject: msg.subject,
          snippet: msg.snippet || "",
          isUnread: msg.isUnread || false,
-         label: "AUTO",
+         label: result.label || "AUTO",
          timestamp: Date.now(),
+         sentDate: msg.sentDate || new Date().toLocaleString(),
          source: "gmail-predict"
        });
        if (trainingDataset.length > MAX_DATASET) trainingDataset.shift();
@@ -174,6 +188,7 @@ async function handleApplyLabel(msg) {
     isUnread: msg.isUnread || false,
     label: msg.newLabel, 
     timestamp: Date.now(), 
+    sentDate: msg.sentDate || new Date().toLocaleString(),
     source: "user-corrected" 
   });
 
@@ -387,7 +402,7 @@ async function processOfflineQueue() {
   while (offlineQueue.length) {
     const id = offlineQueue.shift();
     try {
-      const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`, 
+      const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, 
         { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!res.ok) throw new Error("Message fetch fail");
       
@@ -396,6 +411,7 @@ async function processOfflineQueue() {
       
       const senderDecoded = decodeMime(headersObj.From || "");
       const subjectDecoded = decodeMime(headersObj.Subject || "");
+      const dateHeader = headersObj.Date || "";
       const snippet = msgData.snippet || "";
       const isUnread = msgData.labelIds ? msgData.labelIds.includes("UNREAD") : false;
 
@@ -405,7 +421,10 @@ async function processOfflineQueue() {
         subject: subjectDecoded,
         snippet: snippet,
         isUnread: isUnread,
-        label: "AUTO", timestamp: Date.now(), source: "gmail-auto"
+        label: "AUTO", 
+        timestamp: Date.now(), 
+        sentDate: dateHeader,
+        source: "gmail-auto"
       });
       if (settings.autoApply) {
         const prediction = await predictLabel(senderDecoded, subjectDecoded, snippet, settings);

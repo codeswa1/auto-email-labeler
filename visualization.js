@@ -1,334 +1,319 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  Chart.defaults.color = '#94a3b8';
+  // --- Global Theme & Fallbacks ---
+  Chart.defaults.color = '#1e293b';
   Chart.defaults.font.family = "'Inter', sans-serif";
+  Chart.defaults.font.size = 12;
 
-  // Quick fallback if extension context lacks IndexedDB connection instantly
+  const getStableColor = (str) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    const h = (Math.abs(hash) * 137) % 360; 
+    return `hsla(${h}, 70%, 55%, 0.85)`;
+  };
+
+  const getStableBorder = (str) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    const h = (Math.abs(hash) * 137) % 360;
+    return `hsla(${h}, 80%, 45%, 1)`;
+  };
+
+  // --- Advanced Smart Date Formatter ---
+  const formatSmartDate = (email) => {
+    let date;
+    if (email.sentDate) {
+      // Clean Gmail's title string (e.g., remove day of week like 'Fri, ')
+      let dateStr = email.sentDate.replace(/^[A-Z][a-z]{2},\s/, ""); 
+      date = new Date(dateStr);
+      // Hard check for validity
+      if (isNaN(date.getTime())) {
+          // One more try: just use the raw string if it looks like a time (e.g. "4:30 PM")
+          if (email.sentDate.includes(":") && email.sentDate.length < 10) return email.sentDate;
+          date = new Date(email.timestamp); // Emergency fallback
+      }
+    } else {
+      date = new Date(email.timestamp);
+    }
+    
+    const now = new Date();
+    const timeOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
+    
+    // SPECIAL CASE: Literal words from Gmail
+    const lowerDate = email.sentDate ? email.sentDate.toLowerCase() : "";
+    const isTodayText = lowerDate.includes("today") || (email.sentDate && email.sentDate.includes(":") && email.sentDate.length < 10);
+    const isYesterdayText = lowerDate.includes("yesterday");
+
+    if (isTodayText) {
+      const tStr = date.toLocaleTimeString(undefined, timeOptions);
+      return `Today, ${tStr}`;
+    } else if (isYesterdayText) {
+      const tStr = date.toLocaleTimeString(undefined, timeOptions);
+      return `Yesterday, ${tStr}`;
+    }
+    
+    // Standard logic
+    const isToday = now.toDateString() === date.toDateString();
+    
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = yesterday.toDateString() === date.toDateString();
+
+    if (isToday) {
+      const tStr = date.toLocaleTimeString(undefined, timeOptions);
+      return `Today, ${tStr}`;
+    } else if (isYesterday) {
+      const tStr = date.toLocaleTimeString(undefined, timeOptions);
+      return `Yesterday, ${tStr}`;
+    } else {
+      // Older emails: Oct 10 2025 10:30 AM
+      const dStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      const tStr = date.toLocaleTimeString(undefined, timeOptions);
+      return `${dStr} ${tStr}`;
+    }
+  };
+
   if (typeof idb === 'undefined') {
-    document.getElementById('statsRow').innerHTML = `<div class="stat-card">Error: idb_store.js failed to load.</div>`;
+    const statsRow = document.getElementById('statsRow');
+    if (statsRow) statsRow.innerHTML = `<div class="stat-card">Error: idb_store.js failed to load.</div>`;
     return;
   }
 
-  // Load datasets directly from the local IndexedDB. 
-  // No external fetching needed because this UI is served locally by the extension!
+  // --- Data Initialization ---
   const state = await idb.getAllState();
   const dataset = state.trainingDataset || [];
-  const centroids = state.centroids || {};
-  const vocab = state.vocabulary || [];
-
-  // Data processing
+  const labelsList = [...new Set(dataset.filter(d => d.label !== "AUTO").map(d => d.label))].sort();
+  
   let autoSamples = 0;
   let labelCounts = {};
-
   dataset.forEach(item => {
-    if (item.label === "AUTO") {
-      autoSamples++;
-    } else {
-      labelCounts[item.label] = (labelCounts[item.label] || 0) + 1;
-    }
+    if (item.label === "AUTO") autoSamples++;
+    else labelCounts[item.label] = (labelCounts[item.label] || 0) + 1;
   });
 
-  const labels = Object.keys(labelCounts);
-  const dataCounts = Object.values(labelCounts);
-  const totalCustomLabels = labels.length;
-  const labeledSamples = dataset.length - autoSamples;
+  renderTopStats(dataset.length - autoSamples, autoSamples, labelsList.length);
+  const pieColors = labelsList.map(l => getStableColor(l));
+  const pieBorders = labelsList.map(l => getStableBorder(l));
 
-  // Render top stats
-  const statsHtml = `
-    <div class="stat-card">
-      <div class="stat-value">${labeledSamples}</div>
-      <div class="stat-label">User Validated Emails</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${autoSamples}</div>
-      <div class="stat-label">AUTO/Unlabeled</br>Emails</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${totalCustomLabels}</div>
-      <div class="stat-label">Unique Learned</br>Labels</div>
-    </div>
-  `;
-  document.getElementById('statsRow').innerHTML = statsHtml;
+  renderEmailCluster(dataset.filter(d => d.label !== "AUTO"), labelsList);
+  renderLegend(labelsList, pieColors);
+  renderBarChart(labelsList, labelCounts, pieColors, pieBorders);
+  renderLineChart(dataset, labelsList, pieColors, pieBorders);
+  renderActivityTable(dataset);
+  initSearch(dataset);
 
-  // Generate a sweeping gradient color wheel using dynamically calculated HSL
-  const generatePieColors = () => labels.map((_, i) => `hsla(${(i * 360) / Math.max(labels.length, 1)}, 85%, 65%, 0.9)`);
-  const generatePieBorders = () => labels.map((_, i) => `hsla(${(i * 360) / Math.max(labels.length, 1)}, 85%, 55%, 1)`);
-  const pieColors = generatePieColors();
-  const pieBorders = generatePieBorders();
-
-  const donutCtx = document.getElementById('donutChart').getContext('2d');
-  
-  // Drill-down Modal Variables
   const drilldownModal = document.getElementById('drilldownModal');
   const closeBtn = document.getElementById('closeDrilldown');
-  const tbody = document.getElementById('drilldownBody');
-  const title = document.getElementById('drilldownTitle');
-  
-  closeBtn.onclick = () => drilldownModal.classList.remove('active');
-  
-  function handleChartClick(event, activeElements) {
-    if (!activeElements || activeElements.length === 0) return;
-    const clickedLabel = labels[activeElements[0].index];
-    const matchingEmails = dataset.filter(d => d.label === clickedLabel);
-    
-    title.textContent = `Emails in "${clickedLabel}" (${matchingEmails.length})`;
-    tbody.innerHTML = ''; // clear previous
-    
-    matchingEmails.forEach(email => {
-      const tr = document.createElement('tr');
-      const d = new Date(email.timestamp);
-      // Format as DD/MM/YY, HH:MM AM/PM
-      const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      
-      tr.innerHTML = `
-        <td style="font-weight: 500;">${email.sender}</td>
-        <td style="opacity: 0.9;">${email.subject}</td>
-        <td style="opacity: 0.7; font-size: 0.8rem; white-space: nowrap;">${dateStr}</td>
-      `;
-      tbody.appendChild(tr);
+  if (closeBtn) closeBtn.onclick = () => drilldownModal.classList.remove('active');
+
+  // --- Render Helpers ---
+
+  function renderLegend(labels, colors) {
+    const legend = document.getElementById('clusterLegend');
+    if (!legend) return;
+    legend.innerHTML = labels.map((label, i) => `
+      <div class="legend-item">
+        <div class="legend-color" style="background: ${colors[i]}"></div>
+        <span>${label}</span>
+      </div>
+    `).join('');
+  }
+
+  function renderTopStats(labeled, auto, unique) {
+    const statsRow = document.getElementById('statsRow');
+    if (!statsRow) return;
+    statsRow.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-value">${labeled}</div>
+        <div class="stat-label">Neural Mapped</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${auto}</div>
+        <div class="stat-label">Unclassified</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${unique}</div>
+        <div class="stat-label">Labels</div>
+      </div>
+    `;
+  }
+
+  function getInitials(sender) {
+    if (!sender) return "??";
+    const parts = sender.split(/[ <@.]+/).filter(p => p.length > 0);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return sender.substring(0, 2).toUpperCase();
+  }
+
+  function renderEmailCluster(data, labels) {
+    const container = document.getElementById('clusterContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    const width = container.clientWidth;
+    const height = container.clientHeight || 400;
+
+    const svg = d3.select("#clusterContainer").append("svg")
+      .attr("width", "100%").attr("height", "100%").attr("viewBox", [0, 0, width, height]);
+    const g = svg.append("g");
+    svg.call(d3.zoom().scaleExtent([0.5, 5]).on("zoom", (e) => g.attr("transform", e.transform)));
+
+    const centers = {};
+    const radius = Math.min(width, height) * 0.35;
+    labels.forEach((l, i) => {
+      const angle = (i / labels.length) * 2 * Math.PI;
+      centers[l] = { x: width/2 + radius*Math.cos(angle), y: height/2 + radius*Math.sin(angle) };
     });
-    
+
+    const nodes = data.map(d => ({
+      ...d, radius: 17, initials: getInitials(d.sender),
+      x: centers[d.label].x + (Math.random() - 0.5) * 80,
+      y: centers[d.label].y + (Math.random() - 0.5) * 80
+    }));
+
+    const simulation = d3.forceSimulation(nodes)
+      .force("x", d3.forceX(d => centers[d.label].x).strength(0.55))
+      .force("y", d3.forceY(d => centers[d.label].y).strength(0.55))
+      .force("collide", d3.forceCollide(20))
+      .force("charge", d3.forceManyBody().strength(-35))
+      .velocityDecay(0.4)
+      .on("tick", () => nodeGroups.attr("transform", d => `translate(${d.x},${d.y})`));
+
+    const nodeGroups = g.selectAll(".cluster-node-group").data(nodes).enter().append("g")
+      .attr("class", "cluster-node-group").on("click", (e, d) => showEmailDetail(d));
+
+    nodeGroups.append("circle").attr("r", d => d.radius).attr("fill", d => getStableColor(d.label))
+      .attr("stroke", "rgba(255,255,255,0.8)").attr("stroke-width", 1.5);
+
+    nodeGroups.append("text").attr("class", "node-text").text(d => d.initials).attr("font-size", "9px").attr("fill", "white")
+      .style("pointer-events", "none").attr("text-anchor", "middle").attr("dy", ".35em");
+
+    nodeGroups.append("title").text(d => `Origin: ${d.sender}\nSubject: ${d.subject}\nDate: ${formatSmartDate(d)}`);
+
+    nodeGroups.call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+  }
+
+  function renderStandardModalTable(emails, labelName) {
+    const drilldownModal = document.getElementById('drilldownModal');
+    const title = document.getElementById('drilldownTitle');
+    const tbody = document.getElementById('drilldownBody');
+    const thead = document.querySelector('#drilldownModal thead');
+
+    title.textContent = labelName;
+    if (thead) thead.innerHTML = `<tr><th style="width:25%">Sender</th><th style="width:50%">Subject</th><th style="width:25%">Received</th></tr>`;
+
+    // Sort Descending (Newest First)
+    const sortedEmails = [...emails].sort((a, b) => b.timestamp - a.timestamp);
+
+    tbody.innerHTML = sortedEmails.map(email => `
+      <tr>
+        <td style="font-weight: 500; font-size: 0.9rem; color: var(--accent-primary);">${email.sender}</td>
+        <td class="subject-cell">${email.subject}</td>
+        <td style="color: var(--text-dim); font-size: 0.85rem;">${formatSmartDate(email)}</td>
+      </tr>
+    `).join('');
+
     drilldownModal.classList.add('active');
   }
 
-  // 1. Donut Chart
-  
-  if (totalCustomLabels === 0) {
-    // Empty state
-    new Chart(donutCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ['No Data Yet'],
-        datasets: [{
-          data: [1],
-          backgroundColor: ['rgba(255,255,255,0.05)'],
-          borderWidth: 0
-        }]
-      },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-    });
-  } else {
-    new Chart(donutCtx, {
-      type: 'doughnut',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Total Emails',
-          data: dataCounts,
-          backgroundColor: pieColors,
-          borderWidth: 2,
-          borderColor: pieBorders,
-          hoverOffset: 8
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        onHover: (event, activeElements) => {
-          event.native.target.style.cursor = activeElements.length ? 'pointer' : 'default';
-        },
-        onClick: handleChartClick,
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: { padding: 20, color: '#e2e8f0' }
-          }
-        },
-        cutout: '65%',
-        layout: { padding: 10 }
-      }
-    });
+  function showEmailDetail(email) {
+    renderStandardModalTable([email], "Intelligence Detail");
   }
 
-  // 2. Bar Chart (Mathematical Density / Samples via Vectorization)
-  const barCtx = document.getElementById('barChart').getContext('2d');
-  
-  if (totalCustomLabels === 0) {
-    new Chart(barCtx, { type: 'bar', data: { labels: [], datasets: [] }, options: { scales: { y: { display: false }, x: { display: false } } }});
-  } else {
-    new Chart(barCtx, {
+  function handleChartClick(event, activeElements) {
+    if (!activeElements || activeElements.length === 0) return;
+    const index = activeElements[0].index;
+    const clickedLabel = activeElements[0].element.$context.chart.data.labels[index];
+    const matchingEmails = dataset.filter(d => d.label === clickedLabel);
+    renderStandardModalTable(matchingEmails, `Category: ${clickedLabel} (${matchingEmails.length})`);
+  }
+
+  function renderBarChart(labels, counts, colors, borders) {
+    const ctx = document.getElementById('barChart')?.getContext('2d');
+    if (!ctx) return;
+    new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Number of Emails',
-            data: dataCounts,
-            backgroundColor: pieColors,
-            borderColor: pieBorders,
-            borderWidth: 1,
-            borderRadius: 6,
-            hoverBackgroundColor: pieBorders
-          }
-        ]
+        labels,
+        datasets: [{ label: 'Quantity', data: labels.map(l => counts[l] || 0), backgroundColor: colors, borderColor: borders, borderWidth: 1.5, borderRadius: 6 }]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        onHover: (event, activeElements) => {
-          event.native.target.style.cursor = activeElements.length ? 'pointer' : 'default';
-        },
-        onClick: handleChartClick,
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: { color: 'rgba(255, 255, 255, 0.05)' }
-          },
-          x: {
-            grid: { display: false }
-          }
-        }
+        responsive: true, maintainAspectRatio: false, onClick: handleChartClick,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true }, x: { grid: { display: false } } }
       }
     });
   }
 
-  // 3. Time-Series Velocity (Line Chart)
-  const lineCtx = document.getElementById('lineChart').getContext('2d');
-  
-  if (dataset.length === 0) {
-    new Chart(lineCtx, { type: 'line', data: { labels: [], datasets: [] }, options: { scales: { y: { display: false }, x: { display: false } } }});
-  } else {
-    // Group records by Date string
-    const timeGrouped = {};
+  function renderLineChart(dataset, labels, colors, borders) {
+    const ctx = document.getElementById('lineChart')?.getContext('2d');
+    if (!ctx) return;
+    const timeGroups = {};
     dataset.forEach(item => {
-      // Use YYYY-MM-DD for cohesive sorting & display
-      const dateStr = new Date(item.timestamp).toISOString().split('T')[0];
-      timeGrouped[dateStr] ??= {};
-      if (item.label !== "AUTO") {
-        timeGrouped[dateStr][item.label] = (timeGrouped[dateStr][item.label] || 0) + 1;
-      }
+      const d = new Date(item.timestamp).toISOString().split('T')[0];
+      timeGroups[d] ??= {};
+      if (item.label !== "AUTO") timeGroups[d][item.label] = (timeGroups[d][item.label] || 0) + 1;
     });
-
-    const sortedDates = Object.keys(timeGrouped).sort();
-    
-    // Map each label into a unique dataset spanning the dates
-    const lineDatasets = labels.map((label, idx) => {
-      const dataPoints = sortedDates.map(date => timeGrouped[date][label] || 0);
-      return {
-        label: label,
-        data: dataPoints,
-        borderColor: pieBorders[idx],
-        backgroundColor: pieColors[idx].replace('0.9)', '0.2)'),
-        borderWidth: 2,
-        tension: 0.4, // Smooth curved lines
-        fill: true,
-        pointBackgroundColor: pieBorders[idx],
-        pointRadius: 3,
-        hoverRadius: 6
-      };
-    });
-
-    new Chart(lineCtx, {
-      type: 'line',
-      data: {
-        labels: sortedDates,
-        datasets: lineDatasets
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'top', labels: { color: '#e2e8f0' } }
-        },
-        scales: {
-          y: { beginAtZero: true, grid: { color: 'rgba(255, 255, 255, 0.05)' } },
-          x: { grid: { color: 'rgba(255, 255, 255, 0.05)' } }
-        },
-        interaction: {
-          mode: 'index',
-          intersect: false
-        }
-      }
+    const sortedDates = Object.keys(timeGroups).sort();
+    const lineSets = labels.map((label, idx) => ({
+      label, data: sortedDates.map(d => timeGroups[d][label] || 0),
+      borderColor: borders[idx], backgroundColor: colors[idx].replace('0.85)', '0.08)'),
+      borderWidth: 2, tension: 0.4, fill: true, pointRadius: 2.5
+    }));
+    new Chart(ctx, {
+      type: 'line', data: { labels: sortedDates, datasets: lineSets },
+      options: { responsive: true, maintainAspectRatio: false, onClick: handleChartClick }
     });
   }
 
-  // 4. Recent Activity & Search Rendering
-  const activityBody = document.getElementById('activityBody');
-  const searchInput = document.getElementById('emailSearch');
-  const resultCount = document.getElementById('resultCount');
-  const dropdown = document.getElementById('searchResultsDropdown');
-
-  function renderActivityTable(filterText = '') {
-    const query = (filterText || '').toLowerCase().trim();
-    const filtered = dataset.filter(item => {
-      const sdr = (item.sender || '').toLowerCase();
-      const sub = (item.subject || '').toLowerCase();
-      return sdr.includes(query) || sub.includes(query);
-    }).sort((a, b) => b.timestamp - a.timestamp);
-
-    resultCount.textContent = `${filtered.length} items`;
-    activityBody.innerHTML = '';
-
-    if (filtered.length === 0) {
-      activityBody.innerHTML = `<tr><td colspan="5" style="text-align:center; opacity:0.5; padding: 2rem;">No emails found matching "${filterText}".</td></tr>`;
-      return;
-    }
-
-    filtered.forEach(email => {
-      const tr = document.createElement('tr');
-      const d = new Date(email.timestamp);
-      const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      
-      const statusLabel = email.isUnread ? 'Unread' : 'Read';
-      const statusClass = email.isUnread ? 'unread' : 'read';
-      
-      tr.innerHTML = `
-        <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
-        <td style="font-weight: 500;">${email.sender}</td>
-        <td style="opacity: 0.9;">${email.subject}</td>
-        <td style="opacity: 0.7; font-size: 0.8rem; white-space: nowrap;">${dateStr}</td>
-      `;
-      activityBody.appendChild(tr);
-    });
+  function renderActivityTable(data, filterText = '') {
+    const body = document.getElementById('activityBody');
+    const badge = document.getElementById('resultCount');
+    if (!body) return;
+    const val = filterText.toLowerCase().trim();
+    const filtered = data.filter(d => (d.sender||'').toLowerCase().includes(val) || (d.subject||'').toLowerCase().includes(val))
+      .sort((a,b) => b.timestamp - a.timestamp);
+    if (badge) badge.textContent = `${filtered.length} items`;
+    body.innerHTML = filtered.map(email => `
+      <tr>
+        <td><span class="status-pill ${email.isUnread ? 'unread' : 'read'}">${email.isUnread ? 'Unread' : 'Read'}</span></td>
+        <td style="font-weight: 700; color: var(--accent-primary);">${email.sender}</td>
+        <td class="subject-cell">${email.subject}</td>
+        <td style="opacity: 0.8; font-size: 0.85rem; font-weight: 500;">${formatSmartDate(email)}</td>
+      </tr>
+    `).join('');
   }
 
-  // Initial render
-  renderActivityTable();
-
-  // Search & Dropdown listener
-  searchInput.addEventListener('input', (e) => {
-    const val = e.target.value;
-    renderActivityTable(val);
-    
-    if (!val.trim()) {
-      dropdown.classList.remove('active');
-      return;
-    }
-
-    // Dropdown matches (Top 5)
-    const matches = dataset.filter(item => 
-      (item.sender || '').toLowerCase().includes(val.toLowerCase()) || 
-      (item.subject || '').toLowerCase().includes(val.toLowerCase())
-    ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 5);
-
-    if (matches.length > 0) {
-      dropdown.innerHTML = '';
-      matches.forEach(email => {
-        const d = new Date(email.timestamp);
-        const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-        
-        const item = document.createElement('div');
-        item.className = 'result-item';
-        
-        item.innerHTML = `
-          <div class="result-header">
-            <span class="result-sender">${email.sender}</span>
-            <span class="result-date">${dateStr}</span>
+  function initSearch(data) {
+    const input = document.getElementById('emailSearch');
+    const dd = document.getElementById('searchResultsDropdown');
+    if (!input || !dd) return;
+    input.addEventListener('input', (e) => {
+      const v = e.target.value.toLowerCase().trim();
+      renderActivityTable(data, v);
+      if (!v) return dd.classList.remove('active');
+      const matches = data.filter(d => (d.sender||'').toLowerCase().includes(v) || (d.subject||'').toLowerCase().includes(v))
+        .sort((a,b) => b.timestamp - a.timestamp).slice(0, 10);
+      if (matches.length > 0) {
+        dd.innerHTML = matches.map(email => `
+          <div class="search-item" data-id="${email.messageId || email.timestamp}">
+            <div class="search-item-header">
+              <span class="search-item-sender">${email.sender}</span>
+              <span class="search-item-date">${formatSmartDate(email)}</span>
+            </div>
+            <div class="search-item-subject">${email.subject}</div>
           </div>
-          <div class="result-subject">${email.subject}</div>
-        `;
-        
-        dropdown.appendChild(item);
-      });
-      dropdown.classList.add('active');
-    } else {
-      dropdown.classList.remove('active');
-    }
-  });
-
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e) => {
-    if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
-      dropdown.classList.remove('active');
-    }
-  });
+        `).join('');
+        dd.querySelectorAll('.search-item').forEach(i => i.onclick = () => {
+          const mid = i.dataset.id;
+          const target = data.find(d => (d.messageId||d.timestamp.toString()) === mid);
+          if (target) showEmailDetail(target);
+          dd.classList.remove('active');
+        });
+        dd.classList.add('active');
+      } else dd.classList.remove('active');
+    });
+    document.addEventListener('click', (e) => { if (!input.contains(e.target) && !dd.contains(e.target)) dd.classList.remove('active'); });
+  }
 });

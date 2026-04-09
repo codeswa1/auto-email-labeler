@@ -1,102 +1,134 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Auto Email Labeler Dashboard</title>
-  <link rel="stylesheet" href="visualization.css">
-  <!-- Load IndexedDB helper for direct state access -->
-  <script src="idb_store.js"></script>
-  <!-- Load Chart.js for building our visualization graph instances -->
-  <script src="Chart.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Email Labeler | Intelligence Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="visualization.css">
+    <script src="d3.min.js"></script>
+    <script src="chart.min.js"></script>
+    <script src="idb_store.js"></script>
+    <script src="visualization.js" defer></script>
 </head>
 <body>
-  <div class="dashboard-container">
-    <header class="header">
-      <h1>Label Intelligence Dashboard</h1>
-      <p>Visualizing local ML model patterns and training data distribution.</p>
-    </header>
-
-    <div class="search-section">
-      <div class="search-container">
+  <div class="dashboard-wrapper">
+    <header class="dashboard-header">
+      <div class="header-text">
+        <h1>Label Intelligence</h1>
+        <p>Real-time inbox patterns and neural categorization.</p>
+      </div>
+      <div class="search-container wide-search">
         <span class="search-icon">🔍</span>
-        <input type="text" id="emailSearch" placeholder="Search by sender or subject..." autocomplete="off">
+        <input type="text" id="emailSearch" placeholder="Search emails or senders..." autocomplete="off">
         <div id="searchResultsDropdown" class="search-results-dropdown"></div>
       </div>
+    </header>
+
+    <div id="statsRow" class="stats-grid">
+      <!-- Stats injected via JS -->
+      <div class="stat-card">
+        <div class="stat-value">...</div>
+        <div class="stat-label">Neural Mapped Emails</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">...</div>
+        <div class="stat-label">Unclassified Queue</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">...</div>
+        <div class="stat-label">Active Label Neurons</div>
+      </div>
     </div>
 
-    <div class="stats-row" id="statsRow">
-      <!-- Quick stats loaded via JS -->
-    </div>
+    <main>
+      <div class="visual-grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>Neural Intelligence Cluster</h2>
+              <p>Topological grouping of behavioral email patterns.</p>
+            </div>
+          </div>
+          <div id="clusterLegend" class="cluster-legend"></div>
+          <div id="clusterContainer" class="cluster-container">
+            <!-- D3 Cluster Map -->
+          </div>
+        </div>
 
-    <div class="chart-grid">
-      <div class="chart-card">
-        <h2>Inbox Categorization Map</h2>
-        <div class="canvas-wrapper">
-          <canvas id="donutChart"></canvas>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2>Category Distribution</h2>
+              <p>Relative density of classified email neurons.</p>
+            </div>
+          </div>
+          <div class="canvas-wrapper">
+            <canvas id="barChart"></canvas>
+          </div>
         </div>
       </div>
-      <div class="chart-card">
-        <h2>Label Volume Analysis</h2>
+      
+      <div class="card chart-spacing">
+        <div class="card-header">
+          <div>
+            <h2>Label Velocity Over Time</h2>
+            <p>Temporal activity intensity across focus sectors.</p>
+          </div>
+        </div>
         <div class="canvas-wrapper">
-          <canvas id="barChart"></canvas>
+          <canvas id="lineChart"></canvas>
         </div>
       </div>
-    </div>
-    
-    <div class="chart-card" style="margin-top: 2rem;">
-      <h2>Label Velocity (Time-Series Activity)</h2>
-      <div class="canvas-wrapper" style="min-height: 350px;">
-        <canvas id="lineChart"></canvas>
-      </div>
-    </div>
 
-    <div class="chart-card" style="margin-top: 2rem;">
-      <div class="card-header-flex">
-        <h2>Recent Activity & Search Results</h2>
-        <span id="resultCount" class="badge">0 items</span>
-      </div>
-      <div class="activity-table-container">
-        <table id="activityTable">
-          <thead>
-            <tr>
-              <th style="width: 80px;">Status</th>
-              <th style="width: 250px;">Sender ID</th>
-              <th>Subject Line</th>
-              <th style="width: 180px;">Date / Time</th>
-            </tr>
-          </thead>
-          <tbody id="activityBody">
-            <!-- Data injected via JS -->
-          </tbody>
-        </table>
-      </div>
-    </div>
+      <section class="activity-section-spacing">
+        <div class="activity-header">
+          <h2>Live Activity Stream</h2>
+          <span id="resultCount" class="badge-count">0 items</span>
+        </div>
+        <div class="activity-card">
+          <div class="table-wrapper">
+            <table id="activityTable">
+              <thead>
+                <tr>
+                  <th style="width: 100px;">Status</th>
+                  <th style="width: 280px;">Sender</th>
+                  <th>Subject</th>
+                  <th style="width: 220px;">Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="activityBody">
+                <!-- Data injected via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
 
   <!-- Drilldown Modal -->
-  <div id="drilldownModal" class="drilldown-modal">
-    <div class="drilldown-content">
-      <div class="drilldown-header">
-        <h2 id="drilldownTitle">Loading...</h2>
-        <button id="closeDrilldown">&times;</button>
+  <div id="drilldownModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="drilldownTitle">Category Analysis</h2>
+        <button id="closeDrilldown" class="close-modal">&times;</button>
       </div>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:25%">Sender ID</th>
-              <th>Subject Line</th>
-              <th style="width:20%">Date / Time</th>
-            </tr>
-          </thead>
-          <tbody id="drilldownBody">
-            <!-- Data injected via JS -->
-          </tbody>
-        </table>
+      <div class="modal-body">
+        <div class="modal-body-table">
+          <table>
+            <thead>
+              <!-- JS Injected header -->
+            </thead>
+            <tbody id="drilldownBody">
+              <!-- JS Injected data -->
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
-
-  <script src="visualization.js"></script>
 </body>
 </html>

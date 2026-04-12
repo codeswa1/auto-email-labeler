@@ -45,6 +45,7 @@ const idb = {
       centroids: await idb.get('centroids', {}),
       vocabulary: await idb.get('vocabulary', []),
       idf: await idb.get('idf', {}),
+      currentHistoryId: await idb.get('currentHistoryId', null),
       lastMessageId: await idb.get('lastMessageId', null),
       offlineQueue: await idb.get('offlineQueue', [])
     };

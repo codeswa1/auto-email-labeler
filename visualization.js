@@ -22,14 +22,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const formatSmartDate = (email) => {
     let date;
     if (email.sentDate) {
-      // Clean Gmail's title string (e.g., remove day of week like 'Fri, ')
-      let dateStr = email.sentDate.replace(/^[A-Z][a-z]{2},\s/, ""); 
+      // Robustly handle Gmail's varying date formats
+      let dateStr = email.sentDate.trim();
+      // Remove day of week (e.g., 'Fri, ') if present at start
+      dateStr = dateStr.replace(/^[A-Za-z]{3},\s+/, ""); 
+      
       date = new Date(dateStr);
-      // Hard check for validity
+      
+      // If parsing failed, try using the timestamp
       if (isNaN(date.getTime())) {
-          // One more try: just use the raw string if it looks like a time (e.g. "4:30 PM")
-          if (email.sentDate.includes(":") && email.sentDate.length < 10) return email.sentDate;
-          date = new Date(email.timestamp); // Emergency fallback
+          date = new Date(email.timestamp);
       }
     } else {
       date = new Date(email.timestamp);
@@ -38,39 +40,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     const now = new Date();
     const timeOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
     
-    // SPECIAL CASE: Literal words from Gmail
-    const lowerDate = email.sentDate ? email.sentDate.toLowerCase() : "";
-    const isTodayText = lowerDate.includes("today") || (email.sentDate && email.sentDate.includes(":") && email.sentDate.length < 10);
-    const isYesterdayText = lowerDate.includes("yesterday");
-
-    if (isTodayText) {
-      const tStr = date.toLocaleTimeString(undefined, timeOptions);
-      return `Today, ${tStr}`;
-    } else if (isYesterdayText) {
-      const tStr = date.toLocaleTimeString(undefined, timeOptions);
-      return `Yesterday, ${tStr}`;
-    }
-    
-    // Standard logic
+    // Check for "Today" and "Yesterday" based on actual date object comparison
     const isToday = now.toDateString() === date.toDateString();
     
     const yesterday = new Date();
     yesterday.setDate(now.getDate() - 1);
     const isYesterday = yesterday.toDateString() === date.toDateString();
 
+    const tStr = date.toLocaleTimeString(undefined, timeOptions);
+
     if (isToday) {
-      const tStr = date.toLocaleTimeString(undefined, timeOptions);
       return `Today, ${tStr}`;
     } else if (isYesterday) {
-      const tStr = date.toLocaleTimeString(undefined, timeOptions);
       return `Yesterday, ${tStr}`;
     } else {
       // Older emails: Oct 10 2025 10:30 AM
       const dStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-      const tStr = date.toLocaleTimeString(undefined, timeOptions);
       return `${dStr} ${tStr}`;
     }
   };
+ 
+   const matchesSearch = (item, query) => {
+     const q = (query || "").toLowerCase().trim();
+     if (!q) return true;
+ 
+     const sender = (item.sender || "").toLowerCase();
+     const subject = (item.subject || "").toLowerCase();
+     const dateStr = (item.sentDate || "").toLowerCase();
+     
+     // Check keywords
+     const emailDate = new Date(item.timestamp);
+     const now = new Date();
+     if (q === "today") return now.toDateString() === emailDate.toDateString();
+     if (q === "yesterday") {
+       const yesterdayDate = new Date();
+       yesterdayDate.setDate(now.getDate() - 1);
+       return yesterdayDate.toDateString() === emailDate.toDateString();
+     }
+ 
+     // Normal text match
+     return sender.includes(q) || subject.includes(q) || dateStr.includes(q);
+   };
 
   if (typeof idb === 'undefined') {
     const statsRow = document.getElementById('statsRow');
@@ -81,7 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- Data Initialization ---
   const state = await idb.getAllState();
   const dataset = state.trainingDataset || [];
-  const labelsList = [...new Set(dataset.filter(d => d.label !== "AUTO").map(d => d.label))].sort();
+  const labelsList = [...new Set(dataset.filter(d => d.label !== "AUTO").map(d => d.label))].sort((a, b) => a.localeCompare(b));
   
   let autoSamples = 0;
   let labelCounts = {};
@@ -271,8 +281,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const body = document.getElementById('activityBody');
     const badge = document.getElementById('resultCount');
     if (!body) return;
-    const val = filterText.toLowerCase().trim();
-    const filtered = data.filter(d => (d.sender||'').toLowerCase().includes(val) || (d.subject||'').toLowerCase().includes(val))
+    const filtered = data.filter(d => matchesSearch(d, filterText))
       .sort((a,b) => b.timestamp - a.timestamp);
     if (badge) badge.textContent = `${filtered.length} items`;
     body.innerHTML = filtered.map(email => `
@@ -290,10 +299,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dd = document.getElementById('searchResultsDropdown');
     if (!input || !dd) return;
     input.addEventListener('input', (e) => {
-      const v = e.target.value.toLowerCase().trim();
+      const v = e.target.value;
       renderActivityTable(data, v);
-      if (!v) return dd.classList.remove('active');
-      const matches = data.filter(d => (d.sender||'').toLowerCase().includes(v) || (d.subject||'').toLowerCase().includes(v))
+      if (!v.trim()) return dd.classList.remove('active');
+      const matches = data.filter(d => matchesSearch(d, v))
         .sort((a,b) => b.timestamp - a.timestamp).slice(0, 10);
       if (matches.length > 0) {
         dd.innerHTML = matches.map(email => `

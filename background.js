@@ -29,6 +29,17 @@ async function init() {
   offlineQueue = state.offlineQueue || [];
   emailLabelMap = new Map(state.emailLabelMap || []);
 
+  // One-time sanitization: Deduplicate and sort by timestamp
+  const uniqueDataset = [];
+  const seenIds = new Set();
+  (state.trainingDataset || []).forEach(d => {
+    if (d.messageId && !seenIds.has(d.messageId)) {
+      seenIds.add(d.messageId);
+      uniqueDataset.push(d);
+    }
+  });
+  trainingDataset = uniqueDataset.sort((a,b) => (a.timestamp || 0) - (b.timestamp || 0));
+
   chrome.storage.sync.get({ settings }, sync => {
     if (sync.settings) settings = { ...settings, ...sync.settings };
   });
@@ -84,7 +95,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if(d && d.label && d.label !== "AUTO") uniqueLabels.add(d.label);
       });
 
-      sendResponse({ samples: trainingDataset.length, vocab: vocabulary.length, labels: Array.from(uniqueLabels).join(", "), queue: offlineQueue.length });
+      const sortedLabels = Array.from(uniqueLabels).sort((a, b) => a.localeCompare(b));
+      sendResponse({ samples: trainingDataset.length, vocab: vocabulary.length, labels: sortedLabels.join(", "), queue: offlineQueue.length });
     });
     return true;
   }
@@ -187,7 +199,7 @@ async function handleApplyLabel(msg) {
     snippet: msg.snippet || "", 
     isUnread: msg.isUnread || false,
     label: msg.newLabel, 
-    timestamp: Date.now(), 
+    timestamp: parseGmailDate(msg.sentDate), 
     sentDate: msg.sentDate || new Date().toLocaleString(),
     source: "user-corrected" 
   });
@@ -331,6 +343,14 @@ function decodeMime(str) {
   });
 }
 
+function parseGmailDate(dateStr) {
+  if (!dateStr) return Date.now();
+  // Strip day of week if present "Fri, 12 Apr..."
+  const cleanDate = dateStr.replace(/^[A-Za-z]{3},\s+/, "");
+  const d = new Date(cleanDate);
+  return isNaN(d.getTime()) ? Date.now() : d.getTime();
+}
+
 async function fetchGmailEmails(interactive = false) {
   if (!accessToken) {
     try {
@@ -355,41 +375,64 @@ async function fetchGmailEmails(interactive = false) {
       currentHistoryId = pData.historyId;
       saveStoreData(["historyId"]);
 
-      const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-      url.searchParams.set("maxResults", "50"); // Increased baseline for complete account mapping
-      // Removed "is:unread" to fetch from all folders and labels
-      const mRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
-      const mData = await mRes.json();
-      for (const m of mData.messages || []) offlineQueue.push(m.id);
-    } else {
-      // Delta pull
-      const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/history");
-      url.searchParams.set("startHistoryId", currentHistoryId);
-      url.searchParams.set("historyTypes", "messageAdded");
-      
-      const hRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (hRes.status === 401) {
-        await new Promise(r => chrome.identity.removeCachedAuthToken({token: accessToken}, r));
-        accessToken = null;
-        return fetchGmailEmails(interactive);
-      }
-      if (hRes.status === 404) {
-        currentHistoryId = null; // Stale history, reset
-        return fetchGmailEmails(interactive);
-      }
-      
-      if (!hRes.ok) return;
-      const hData = await hRes.json();
-      currentHistoryId = hData.historyId || currentHistoryId;
-      saveStoreData(["historyId"]);
+      // Fetch latest messages with pagination (limit to 500 for baseline)
+      let allMessages = [];
+      let pageToken = null;
+      do {
+        const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+        url.searchParams.set("maxResults", "250");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        
+        const mRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+        const mData = await mRes.json();
+        if (mData.messages) allMessages.push(...mData.messages);
+        pageToken = mData.nextPageToken;
+      } while (pageToken && allMessages.length < 500);
 
-      for (const record of hData.history || []) {
-        for (const msgAdded of record.messagesAdded || []) {
-          if (!offlineQueue.includes(msgAdded.message.id)) {
-             offlineQueue.push(msgAdded.message.id);
+      // CRITICAL: Reverse to process OLD-TO-NEW so the array ends with newest and shift() removes oldest
+      for (const m of allMessages.reverse()) {
+        if (!offlineQueue.includes(m.id)) offlineQueue.push(m.id);
+      }
+    } else {
+      // Delta pull with pagination
+      let pageToken = null;
+      do {
+        const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/history");
+        url.searchParams.set("startHistoryId", currentHistoryId);
+        url.searchParams.set("historyTypes", "messageAdded");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        
+        const hRes = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (hRes.status === 401) {
+          await new Promise(r => chrome.identity.removeCachedAuthToken({token: accessToken}, r));
+          accessToken = null;
+          return fetchGmailEmails(interactive);
+        }
+        if (hRes.status === 404) {
+          currentHistoryId = null; // Stale history, reset
+          return fetchGmailEmails(interactive);
+        }
+        
+        if (!hRes.ok) break;
+        const hData = await hRes.json();
+        
+        // Add new history messages to queue
+        const batch = [];
+        for (const record of hData.history || []) {
+          for (const msgAdded of record.messagesAdded || []) {
+             batch.push(msgAdded.message.id);
           }
         }
-      }
+        // History is naturally chronological (oldest to newest)
+        for (const mid of batch) {
+          if (!offlineQueue.includes(mid)) offlineQueue.push(mid);
+        }
+
+        currentHistoryId = hData.historyId || currentHistoryId;
+        pageToken = hData.nextPageToken;
+      } while (pageToken);
+      
+      saveStoreData(["historyId"]);
     }
 
     if (offlineQueue.length > 0) await processOfflineQueue();
@@ -406,6 +449,9 @@ async function processOfflineQueue() {
         { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!res.ok) throw new Error("Message fetch fail");
       
+      const isDuplicate = trainingDataset.some(d => d.messageId === id);
+      if (isDuplicate) continue;
+
       const msgData = await res.json();
       const headersObj = Object.fromEntries(msgData.payload.headers.map(h => [h.name, h.value]));
       
@@ -422,10 +468,12 @@ async function processOfflineQueue() {
         snippet: snippet,
         isUnread: isUnread,
         label: "AUTO", 
-        timestamp: Date.now(), 
+        timestamp: Number(msgData.internalDate) || Date.now(), 
         sentDate: dateHeader,
         source: "gmail-auto"
       });
+      if (trainingDataset.length > MAX_DATASET) trainingDataset.shift(); // Added global truncation check
+
       if (settings.autoApply) {
         const prediction = await predictLabel(senderDecoded, subjectDecoded, snippet, settings);
         if (prediction && prediction.label && prediction.label !== "AUTO" && prediction.isGraduated) {

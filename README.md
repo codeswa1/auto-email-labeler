@@ -35,6 +35,7 @@ The application achieves this through a **Distributed Browser Architecture**, of
 
 ### Visualization & UI
 *   **Chart.js**: Dynamic, canvas-based rendering for the "Label Intelligence Dashboard."
+*   **Intelligent Date Formatter**: A robust parser for Gmail's varying date formats that provides "Today/Yesterday" contexts and handles UTC/Local time conversions.
 *   **Vanilla CSS3 (Aesthetic Layer)**: A custom design system featuring glassmorphism, dark mode, and micro-animations for a premium dashboard experience.
 
 ---
@@ -89,6 +90,12 @@ Unlike deep learning models (Transformers/BERT) which are computationally expens
 ### Why the "Thin Client" Content Script?
 Gmail is a massive, complex Single Page Application (SPA). To prevent performance degradation, `content_script.js` performs zero logic. It simply observes the DOM, sends an RPC message to the background orchestrator, and waits for a "ready-to-render" prediction. This keeps the user's Gmail tab fast and light.
 
+### Why Internal Date Tracking?
+The Gmail API returns message lists in reverse-chronological order, which can cause traditional "first-in-first-out" queues to accidentally delete the newest data when limits are reached. Our system implements **Reverse Ingestion & Chronological Integrity**:
+1.  **Manual Reversal**: Message batches are reversed during sync so they are stored oldest-to-newest.
+2.  **Internal Timestamps**: We use the native Gmail `internalDate` (receipt time) instead of "fetch time" for all sorting and line-chart grouping.
+3.  **Sanitized Initialization**: Every startup includes a deduplication and re-sorting pass to ensure database integrity.
+
 ---
 
 ## 6. Implementation & Installation
@@ -96,7 +103,10 @@ Gmail is a massive, complex Single Page Application (SPA). To prevent performanc
 1.  **Clone the Repo**: `git clone <repo-url>`
 2.  **Load Unpacked**: Go to `chrome://extensions`, enable **Developer Mode**, and click **Load Unpacked**. Select the project folder.
 3.  **Authorize**: Open the extension popup, enable "Background Sync API," and follow the OAuth2 prompt to grant Gmail access.
-4.  **Analyze**: Open the **Label Intelligence Dashboard** via the floating "Auto Labeler" button in Gmail to see your inbox distribution in real-time.
+4.  **Analyze**: Open the **Label Intelligence Dashboard** via the floating "Auto Labeler" button in Gmail.
+    *   **Intelligent Search**: Use keywords like `today` or `yesterday` in the search bar to filter instantly.
+    *   **Dynamic Legend**: Click any label in the charts to see a detailed drill-down of emails in that category.
+    *   **Alphabetical Organization**: Labels are automatically sorted alphabetically across all lists, including the Gmail override dropdown.
 
 ---
 

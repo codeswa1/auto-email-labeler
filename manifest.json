@@ -1,14 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Auto Email Labeler",
-  "description": "Automatically labels emails using on-device learning.",
+  "name": "HushInMosiac Labeler",
+  "description": "Smart on-device email organization and pattern recognition.",
   "version": "1.0.0",
 
   "permissions": [
     "storage",
     "tabs",
-    "identity",
-    "identity.email",
     "alarms",
     "offscreen"
   ],
@@ -16,13 +14,6 @@
   "host_permissions": [
     "*://mail.google.com/*"
   ],
-
-  "oauth2": {
-    "client_id": "590450940640-9l860kqpraoe5rlphopnusc6io4f5oju.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/gmail.modify"
-    ]
-  },
 
   "background": {
     "service_worker": "background.js"

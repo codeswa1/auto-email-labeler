@@ -19,7 +19,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // --- Advanced Smart Date Formatter ---
+  const getNormalizedLabel = (email) => {
+    if (!email || !email.label || email.label === "AUTO") return "Unclassified";
+    return email.label;
+  };
+
+  const getLocalDateString = (email) => {
+    const ts = Number(email.timestamp) || Date.now();
+    const dateObj = new Date(ts);
+    return dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+  };
+
   const formatSmartDate = (email) => {
+
     let date;
     if (email.sentDate) {
       // Robustly handle Gmail's varying date formats
@@ -60,27 +72,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
  
-   const matchesSearch = (item, query) => {
-     const q = (query || "").toLowerCase().trim();
-     if (!q) return true;
- 
-     const sender = (item.sender || "").toLowerCase();
-     const subject = (item.subject || "").toLowerCase();
-     const dateStr = (item.sentDate || "").toLowerCase();
-     
-     // Check keywords
-     const emailDate = new Date(item.timestamp);
-     const now = new Date();
-     if (q === "today") return now.toDateString() === emailDate.toDateString();
-     if (q === "yesterday") {
-       const yesterdayDate = new Date();
-       yesterdayDate.setDate(now.getDate() - 1);
-       return yesterdayDate.toDateString() === emailDate.toDateString();
-     }
- 
-     // Normal text match
-     return sender.includes(q) || subject.includes(q) || dateStr.includes(q);
-   };
+    const matchesSearch = (item, query) => {
+      const q = (query || "").toLowerCase().trim();
+      if (!q) return true;
+
+      const sender = (item.sender || "").toLowerCase();
+      const subject = (item.subject || "").toLowerCase();
+      const dateStr = (item.sentDate || "").toLowerCase();
+      const smartDate = formatSmartDate(item).toLowerCase();
+      
+      // Keyword matching
+      const emailDate = new Date(item.timestamp);
+      const now = new Date();
+      if (q === "today") return now.toDateString() === emailDate.toDateString();
+      if (q === "yesterday") {
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(now.getDate() - 1);
+        return yesterdayDate.toDateString() === emailDate.toDateString();
+      }
+
+      // Normal text match across all fields including the human-readable date
+      return sender.includes(q) || 
+             subject.includes(q) || 
+             dateStr.includes(q) || 
+             smartDate.includes(q);
+    };
 
   if (typeof idb === 'undefined') {
     const statsRow = document.getElementById('statsRow');
@@ -91,25 +107,109 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- Data Initialization ---
   const state = await idb.getAllState();
   const dataset = state.trainingDataset || [];
-  const labelsList = [...new Set(dataset.filter(d => d.label !== "AUTO").map(d => d.label))].sort((a, b) => a.localeCompare(b));
+  
+  // Identify all labels globally
+  const rawLabels = [...new Set(dataset.map(d => getNormalizedLabel(d)))];
+
+  const labelsList = rawLabels.sort((a, b) => {
+    if (a === "Unclassified") return 1;
+    if (b === "Unclassified") return -1;
+    return a.localeCompare(b);
+  });
   
   let autoSamples = 0;
   let labelCounts = {};
   dataset.forEach(item => {
-    if (item.label === "AUTO") autoSamples++;
-    else labelCounts[item.label] = (labelCounts[item.label] || 0) + 1;
+    const label = getNormalizedLabel(item);
+    if (label === "Unclassified") autoSamples++;
+    labelCounts[label] = (labelCounts[label] || 0) + 1;
   });
 
-  renderTopStats(dataset.length - autoSamples, autoSamples, labelsList.length);
-  const pieColors = labelsList.map(l => getStableColor(l));
-  const pieBorders = labelsList.map(l => getStableBorder(l));
 
-  renderEmailCluster(dataset.filter(d => d.label !== "AUTO"), labelsList);
-  renderLegend(labelsList, pieColors);
-  renderBarChart(labelsList, labelCounts, pieColors, pieBorders);
-  renderLineChart(dataset, labelsList, pieColors, pieBorders);
+  // Final sanity check for libraries
+  const isD3Ready = typeof d3 !== 'undefined';
+  const isChartReady = typeof Chart !== 'undefined';
+
+  try { renderTopStats(dataset.length - autoSamples, autoSamples, labelsList.filter(l => l !== "Unclassified").length); } catch(e) { console.error("Stats fail", e); }
+  
+  const pieColors = labelsList.map(l => l === "Unclassified" ? "#94a3b8" : getStableColor(l));
+  const pieBorders = labelsList.map(l => l === "Unclassified" ? "#64748b" : getStableBorder(l));
+
+  // Render everything with library guards
+  const clusterData = dataset.map(d => ({ ...d, label: d.label === "AUTO" ? "Unclassified" : d.label }));
+  
+  if (isD3Ready) {
+    renderEmailCluster(clusterData, labelsList);
+    renderLegend(labelsList, pieColors);
+  } else {
+    document.getElementById('clusterContainer').innerHTML = `<div style="padding:40px; color:var(--text-dim); text-align:center;">D3 Visualization Library failed to load. Using raw table only.</div>`;
+  }
+
+  if (isChartReady) {
+    renderBarChart(labelsList, labelCounts, pieColors, pieBorders);
+    renderLineChart(dataset, labelsList, pieColors, pieBorders);
+  }
+
   renderActivityTable(dataset);
   initSearch(dataset);
+
+
+  // --- Live Update (Optimized) ---
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "DATA_UPDATED") {
+      console.log("Intelligence broadcast received:", msg.keys);
+      handleDataUpdate();
+    }
+  });
+
+  async function handleDataUpdate() {
+    try {
+      const newState = await idb.getAllState();
+      const newDataset = newState.trainingDataset || [];
+      
+      // Removed: bailout on same length to ensure label updates/graduations are visible.
+      // We now perform a light content check if performance becomes an issue.
+      
+      console.log(`Dynamic Update: Dataset refreshed with ${newDataset.length} items.`);
+      
+      // Update the local reference
+      dataset.length = 0;
+      dataset.push(...newDataset);
+      
+      // Recalculate stats
+      const rawLabels = [...new Set(dataset.map(d => getNormalizedLabel(d)))];
+      const labelsList = rawLabels.sort((a,b) => {
+        if (a === "Unclassified") return 1;
+        if (b === "Unclassified") return -1;
+        return a.localeCompare(b);
+      });
+      
+      let autoSamples = 0;
+      dataset.forEach(item => { if (getNormalizedLabel(item) === "Unclassified") autoSamples++; });
+      
+      // Partial UI Update
+      renderTopStats(dataset.length - autoSamples, autoSamples, labelsList.filter(l => l !== "Unclassified").length);
+      renderActivityTable(dataset, document.getElementById('emailSearch')?.value || '');
+      
+      // Update charts if they exist
+      if (isChartReady) {
+        const counts = {};
+        dataset.forEach(item => { const l = getNormalizedLabel(item); counts[l] = (counts[l] || 0) + 1; });
+        const colors = labelsList.map(l => l === "Unclassified" ? "#94a3b8" : getStableColor(l));
+        const borders = labelsList.map(l => l === "Unclassified" ? "#64748b" : getStableBorder(l));
+        
+        // Find existing chart instances and update them
+        Chart.getChart("barChart")?.destroy();
+        Chart.getChart("lineChart")?.destroy();
+        renderBarChart(labelsList, counts, colors, borders);
+        renderLineChart(dataset, labelsList, colors, borders);
+      }
+      
+    } catch(e) { console.warn("Dynamic update failed", e); }
+  }
+
+
+
 
   const drilldownModal = document.getElementById('drilldownModal');
   const closeBtn = document.getElementById('closeDrilldown');
@@ -134,11 +234,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     statsRow.innerHTML = `
       <div class="stat-card">
         <div class="stat-value">${labeled}</div>
-        <div class="stat-label">Neural Mapped</div>
+        <div class="stat-label">Analyzed Emails</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">${auto}</div>
-        <div class="stat-label">Unclassified</div>
+        <div class="stat-label">Pending Review</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">${unique}</div>
@@ -157,52 +257,73 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderEmailCluster(data, labels) {
     const container = document.getElementById('clusterContainer');
     if (!container) return;
-    container.innerHTML = '';
-    const width = container.clientWidth;
-    const height = container.clientHeight || 400;
+    if (typeof d3 === 'undefined') {
+        container.innerHTML = `<div style="padding:40px; color:var(--text-dim); text-align:center;">D3 Visualization Library failed to load.</div>`;
+        return;
+    }
+    
+    try {
+      // Density Guard: Only render the latest 5,000 for the simulation to keep Gmail fluid
+      const MAX_VISUAL_NODES = 5000;
+      const visualData = data.length > MAX_VISUAL_NODES ? data.slice(-MAX_VISUAL_NODES) : data;
+      
+      container.innerHTML = '';
+      const width = container.clientWidth;
+      const height = container.clientHeight || 400;
 
-    const svg = d3.select("#clusterContainer").append("svg")
-      .attr("width", "100%").attr("height", "100%").attr("viewBox", [0, 0, width, height]);
-    const g = svg.append("g");
-    svg.call(d3.zoom().scaleExtent([0.5, 5]).on("zoom", (e) => g.attr("transform", e.transform)));
+      const svg = d3.select("#clusterContainer").append("svg")
+        .attr("width", "100%").attr("height", "100%").attr("viewBox", [0, 0, width, height]);
 
-    const centers = {};
-    const radius = Math.min(width, height) * 0.35;
-    labels.forEach((l, i) => {
-      const angle = (i / labels.length) * 2 * Math.PI;
-      centers[l] = { x: width/2 + radius*Math.cos(angle), y: height/2 + radius*Math.sin(angle) };
-    });
+      const g = svg.append("g");
+      svg.call(d3.zoom().scaleExtent([0.5, 5]).on("zoom", (e) => g.attr("transform", e.transform)));
 
-    const nodes = data.map(d => ({
-      ...d, radius: 17, initials: getInitials(d.sender),
-      x: centers[d.label].x + (Math.random() - 0.5) * 80,
-      y: centers[d.label].y + (Math.random() - 0.5) * 80
-    }));
+      const centers = {};
+      const radius = Math.min(width, height) * 0.35;
+      labels.forEach((l, i) => {
+        const angle = (i / labels.length) * 2 * Math.PI;
+        centers[l] = { x: width/2 + radius*Math.cos(angle), y: height/2 + radius*Math.sin(angle) };
+      });
 
-    const simulation = d3.forceSimulation(nodes)
-      .force("x", d3.forceX(d => centers[d.label].x).strength(0.55))
-      .force("y", d3.forceY(d => centers[d.label].y).strength(0.55))
-      .force("collide", d3.forceCollide(20))
-      .force("charge", d3.forceManyBody().strength(-35))
-      .velocityDecay(0.4)
-      .on("tick", () => nodeGroups.attr("transform", d => `translate(${d.x},${d.y})`));
+      const nodes = visualData.map(d => ({
+        ...d, radius: 17, initials: getInitials(d.sender),
+        x: centers[d.label].x + (Math.random() - 0.5) * 80,
+        y: centers[d.label].y + (Math.random() - 0.5) * 80
+      }));
 
-    const nodeGroups = g.selectAll(".cluster-node-group").data(nodes).enter().append("g")
-      .attr("class", "cluster-node-group").on("click", (e, d) => showEmailDetail(d));
+      const simulation = d3.forceSimulation(nodes)
+        .force("x", d3.forceX(d => centers[d.label].x).strength(0.55))
+        .force("y", d3.forceY(d => centers[d.label].y).strength(0.55))
+        .force("collide", d3.forceCollide(20))
+        .force("charge", d3.forceManyBody().strength(-35))
+        .velocityDecay(0.4)
+        .on("tick", () => nodeGroups.attr("transform", d => `translate(${d.x},${d.y})`));
 
-    nodeGroups.append("circle").attr("r", d => d.radius).attr("fill", d => getStableColor(d.label))
-      .attr("stroke", "rgba(255,255,255,0.8)").attr("stroke-width", 1.5);
+      const nodeGroups = g.selectAll(".cluster-node-group").data(nodes).enter().append("g")
+        .attr("class", "cluster-node-group").on("click", (e, d) => showEmailDetail(d));
 
-    nodeGroups.append("text").attr("class", "node-text").text(d => d.initials).attr("font-size", "9px").attr("fill", "white")
-      .style("pointer-events", "none").attr("text-anchor", "middle").attr("dy", ".35em");
+      nodeGroups.append("circle")
+        .attr("r", d => d.radius)
+        .attr("fill", d => getStableColor(d.label))
+        .attr("stroke", d => d.isUnread ? "#ffffff" : "rgba(255,255,255,0.3)")
+        .attr("stroke-width", d => d.isUnread ? 3 : 1)
+        .style("filter", d => d.isUnread ? "drop-shadow(0 0 5px rgba(255,255,255,0.6))" : "none");
 
-    nodeGroups.append("title").text(d => `Origin: ${d.sender}\nSubject: ${d.subject}\nDate: ${formatSmartDate(d)}`);
+      nodeGroups.append("text").attr("class", "node-text").text(d => d.initials).attr("font-size", "9px").attr("fill", "white")
+        .style("pointer-events", "none").attr("text-anchor", "middle").attr("dy", ".35em");
 
-    nodeGroups.call(d3.drag()
-      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      nodeGroups.append("title").text(d => `Origin: ${d.sender}\nSubject: ${d.subject}\nDate: ${formatSmartDate(d)}`);
+
+      nodeGroups.call(d3.drag()
+        .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+
       .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
       .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+    } catch(e) {
+      console.error("Cluster render failed:", e);
+      container.innerHTML = `<div style="padding:40px; color:var(--text-dim); text-align:center;">Failed to generate neural cluster. See console for details.</div>`;
+    }
   }
+
 
   function renderStandardModalTable(emails, labelName) {
     const drilldownModal = document.getElementById('drilldownModal');
@@ -232,50 +353,114 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function handleChartClick(event, activeElements) {
-    if (!activeElements || activeElements.length === 0) return;
-    const index = activeElements[0].index;
-    const clickedLabel = activeElements[0].element.$context.chart.data.labels[index];
-    const matchingEmails = dataset.filter(d => d.label === clickedLabel);
-    renderStandardModalTable(matchingEmails, `Category: ${clickedLabel} (${matchingEmails.length})`);
+    const chart = event.chart;
+    let clickedVal = null;
+    let isDate = chart.canvas.id === 'lineChart';
+
+    if (activeElements && activeElements.length > 0) {
+      // Clicked a specific data point
+      const index = activeElements[0].index;
+      clickedVal = chart.data.labels[index];
+    } else {
+      // User clicked on the "base" (X-axis labels)
+      const points = chart.getElementsAtEventForMode(event.native, 'index', { intersect: false }, true);
+      if (points.length > 0) {
+        clickedVal = chart.data.labels[points[0].index];
+      }
+    }
+
+    if (!clickedVal) return;
+
+    if (isDate) {
+      const matchingEmails = dataset.filter(item => getLocalDateString(item) === clickedVal);
+      renderStandardModalTable(matchingEmails, `Drilldown: ${clickedVal} (${matchingEmails.length} emails)`);
+    } else {
+      const matchingEmails = dataset.filter(d => getNormalizedLabel(d) === clickedVal);
+      renderStandardModalTable(matchingEmails, `Category: ${clickedVal} (${matchingEmails.length} items)`);
+    }
   }
+
+
 
   function renderBarChart(labels, counts, colors, borders) {
     const ctx = document.getElementById('barChart')?.getContext('2d');
     if (!ctx) return;
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{ label: 'Quantity', data: labels.map(l => counts[l] || 0), backgroundColor: colors, borderColor: borders, borderWidth: 1.5, borderRadius: 6 }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false, onClick: handleChartClick,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true }, x: { grid: { display: false } } }
-      }
-    });
+    if (typeof Chart === 'undefined') return;
+    
+    try {
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{ label: 'Quantity', data: labels.map(l => counts[l] || 0), backgroundColor: colors, borderColor: borders, borderWidth: 1.5, borderRadius: 6 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, onClick: handleChartClick,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true }, x: { grid: { display: false } } }
+        }
+      });
+    } catch(e) { console.error("Bar chart render failed:", e); }
   }
+
 
   function renderLineChart(dataset, labels, colors, borders) {
     const ctx = document.getElementById('lineChart')?.getContext('2d');
     if (!ctx) return;
-    const timeGroups = {};
-    dataset.forEach(item => {
-      const d = new Date(item.timestamp).toISOString().split('T')[0];
-      timeGroups[d] ??= {};
-      if (item.label !== "AUTO") timeGroups[d][item.label] = (timeGroups[d][item.label] || 0) + 1;
-    });
-    const sortedDates = Object.keys(timeGroups).sort();
-    const lineSets = labels.map((label, idx) => ({
-      label, data: sortedDates.map(d => timeGroups[d][label] || 0),
-      borderColor: borders[idx], backgroundColor: colors[idx].replace('0.85)', '0.08)'),
-      borderWidth: 2, tension: 0.4, fill: true, pointRadius: 2.5
-    }));
-    new Chart(ctx, {
-      type: 'line', data: { labels: sortedDates, datasets: lineSets },
-      options: { responsive: true, maintainAspectRatio: false, onClick: handleChartClick }
-    });
+    if (typeof Chart === 'undefined') return;
+
+    try {
+      const timeGroups = {};
+      dataset.forEach(item => {
+        const d = getLocalDateString(item);
+        timeGroups[d] ??= {};
+        const label = getNormalizedLabel(item);
+        timeGroups[d][label] = (timeGroups[d][label] || 0) + 1;
+      });
+
+
+      const sortedDates = Object.keys(timeGroups).sort();
+      const lineSets = labels.map((label, idx) => ({
+        label, data: sortedDates.map(d => timeGroups[d][label] || 0),
+        borderColor: borders[idx], backgroundColor: colors[idx].replace('0.85)', '0.08)'),
+        borderWidth: 2, tension: 0.4, fill: true, pointRadius: 2.5
+      }));
+      new Chart(ctx, {
+        type: 'line', 
+        data: { labels: sortedDates, datasets: lineSets },
+        options: { 
+          responsive: true, 
+          maintainAspectRatio: false, 
+          onClick: handleChartClick,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            tooltip: {
+              position: 'nearest',
+              filter: function(tooltipItem) {
+                // Reduces clutter: only show categories that actually have emails on this date
+                return tooltipItem.raw > 0;
+              },
+              callbacks: {
+                label: function(context) {
+                  const val = context.raw || 0;
+                  return ` ${context.dataset.label}: ${val} emails`;
+                }
+              }
+            }
+          },
+          scales: {
+            y: { beginAtZero: true, ticks: { precision: 0 } }
+          }
+
+        }
+      });
+    } catch(e) { console.error("Line chart render failed:", e); }
+
   }
+
 
   function renderActivityTable(data, filterText = '') {
     const body = document.getElementById('activityBody');

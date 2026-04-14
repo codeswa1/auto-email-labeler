@@ -2,29 +2,43 @@
 <html>
 <head>
   <style>
-    body { font-family: sans-serif; width: 320px; padding: 12px; font-size: 13px; color: #333; }
-    h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #ccc; padding-bottom: 8px; }
-    label { display: block; margin-bottom: 8px; font-size: 13px; cursor: pointer; }
-    .stats { background: #f9f9f9; padding: 8px; border-radius: 4px; font-size: 12px; line-height: 1.5; }
-    .bold { font-weight: bold; }
+    body { font-family: -apple-system, blinkmacsystemfont, "Segoe UI", roboto, helvetica, arial, sans-serif; width: 320px; padding: 16px; font-size: 14px; color: #1a1a1a; background: #fff; line-height: 1.4; }
+    h3 { margin-top: 0; font-size: 18px; color: #1a73e8; border-bottom: 2px solid #e8f0fe; padding-bottom: 10px; margin-bottom: 16px; }
+    .status-group { background: #f8f9fa; border: 1px solid #e0e0e0; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+    .stat-row { display: flex; justify-content: space-between; margin-bottom: 6px; }
+    .stat-label { color: #5f6368; font-weight: 500; }
+    .stat-value { font-weight: 600; color: #202124; }
+    .btn { display: block; width: 100%; padding: 10px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; text-align: center; transition: background 0.2s; }
+    .btn-primary { background: #1a73e8; color: white; margin-bottom: 8px; }
+    .btn-primary:hover { background: #1765cc; }
+    .btn-secondary { background: #f1f3f4; color: #3c4043; border: 1px solid #dadce0; }
+    .btn-secondary:hover { background: #e8eaed; }
+    .note { font-size: 11px; color: #70757a; text-align: center; margin-top: 12px; }
   </style>
 </head>
 <body>
 
-<h3>Auto Email Labeler Settings</h3>
+<h3>HushInMosiac Hub</h3>
 
-<label><input type="checkbox" id="autoApply"> Auto Apply Labels natively in Gmail</label>
-<label><input type="checkbox" id="senderBoost"> Sender Memory Boost</label>
-<label><input type="checkbox" id="gmailApi"> Background Sync API</label>
-
-<hr/>
-<div class="stats">
-  <span class="bold">Server Stats:</span><br/>
-  Samples Learned: <span id="statsSamples">0</span><br/>
-  Total Labels: <span id="statsLabels">None</span><br/>
-  Offline Queue: <span id="statsQueue">0</span> items
+<div class="status-group">
+  <div class="stat-row">
+    <span class="stat-label">Analyzed Emails:</span>
+    <span class="stat-value" id="statsSamples">0</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Active Categories:</span>
+    <span class="stat-value" id="statsLabels">None</span>
+  </div>
+  <div class="stat-row" style="margin-top: 8px; border-top: 1px solid #e8f0fe; padding-top: 8px;">
+    <span class="stat-label">System Status:</span>
+    <span class="stat-value" id="systemStatus" style="color: #34a853;">Ready</span>
+  </div>
 </div>
+
+
+<button id="openDashboard" class="btn btn-primary">Open Analytics Dashboard</button>
 
 <script src="popup.js"></script>
 </body>
 </html>
+

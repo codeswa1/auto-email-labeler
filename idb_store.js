@@ -18,24 +18,47 @@ function openDB() {
 
 const idb = {
   get: async (key, defaultValue = null) => {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('store', 'readonly');
-      const store = tx.objectStore('store');
-      const req = store.get(key);
-      req.onsuccess = () => resolve(req.result !== undefined ? req.result : defaultValue);
-      req.onerror = () => reject(req.error);
-    });
+    try {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('store', 'readonly');
+        const store = tx.objectStore('store');
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result !== undefined ? req.result : defaultValue);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.error("IDB Get Error:", e);
+      return defaultValue;
+    }
   },
   set: async (key, value) => {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('store', 'readwrite');
-      const store = tx.objectStore('store');
-      const req = store.put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    try {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('store', 'readwrite');
+        const store = tx.objectStore('store');
+        const req = store.put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.error("IDB Set Error:", e);
+    }
+  },
+  delete: async (key) => {
+    try {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('store', 'readwrite');
+        const store = tx.objectStore('store');
+        const req = store.delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.error("IDB Delete Error:", e);
+    }
   },
   getAllState: async () => {
     return {
@@ -49,5 +72,10 @@ const idb = {
       lastMessageId: await idb.get('lastMessageId', null),
       offlineQueue: await idb.get('offlineQueue', [])
     };
+  },
+  clearStaleData: async () => {
+    // Disabled: Auto-purging was causing data loss for read emails that hadn't graduated yet.
+    // We now rely on background.js smartTrimDataset logic which uses a much larger safety buffer (25,000).
+    console.log("IDB: clearStaleData bypass engaged (Safety Mode).");
   }
 };

@@ -1,48 +1,29 @@
-const DEFAULT_SETTINGS = {
-  autoApply: true, autoLearn: true, senderBoost: true,
-  gmailApiEnabled: false
-};
-
-let settings = { ...DEFAULT_SETTINGS };
-
 const els = {
-  autoApply: document.getElementById("autoApply"),
-  senderBoost: document.getElementById("senderBoost"),
-  gmailApi: document.getElementById("gmailApi"),
   statsSamples: document.getElementById("statsSamples"),
   statsLabels: document.getElementById("statsLabels"),
-  statsQueue: document.getElementById("statsQueue")
+  systemStatus: document.getElementById("systemStatus"),
+  openDashboard: document.getElementById("openDashboard")
 };
 
-function saveSettings() {
-  settings.autoApply = els.autoApply.checked;
-  settings.senderBoost = els.senderBoost.checked;
-  settings.gmailApiEnabled = els.gmailApi.checked;
-
-  chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings });
-}
-
-chrome.storage.sync.get({ settings: DEFAULT_SETTINGS }, res => {
-  settings = { ...DEFAULT_SETTINGS, ...res.settings };
-  
-  els.autoApply.checked = settings.autoApply;
-  els.senderBoost.checked = settings.senderBoost;
-  els.gmailApi.checked = settings.gmailApiEnabled;
-});
-
-["autoApply", "senderBoost", "gmailApi"].forEach(key => {
-  els[key].addEventListener("change", () => {
-    saveSettings();
-    if (key === "gmailApi" && els.gmailApi.checked) {
-      chrome.runtime.sendMessage({ type: "FETCH_GMAIL" });
+function updateStats() {
+  chrome.runtime.sendMessage({ type: "GET_STATS" }, (response) => {
+    if (chrome.runtime.lastError) {
+      els.systemStatus.textContent = "Error: Connection lost";
+      els.systemStatus.style.color = "#d93025";
+      return;
+    }
+    if (response) {
+      els.statsSamples.textContent = response.samples || 0;
+      els.statsLabels.textContent = response.labels || "None";
     }
   });
+}
+
+// Initial stats fetch
+updateStats();
+setInterval(updateStats, 2000);
+
+els.openDashboard.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
 });
 
-chrome.runtime.sendMessage({ type: "GET_STATS" }, stats => {
-  if (stats) {
-    els.statsSamples.textContent = stats.samples || 0;
-    els.statsLabels.textContent = stats.labels || "None";
-    els.statsQueue.textContent = stats.queue || 0;
-  }
-});

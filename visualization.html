@@ -1,24 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Auto Email Labeler | Intelligence Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="visualization.css">
-    <script src="d3.min.js"></script>
-    <script src="chart.min.js"></script>
-    <script src="idb_store.js"></script>
-    <script src="visualization.js" defer></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto Email Labeler | Intelligence Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="visualization.css">
+  <script src="d3.min.js"></script>
+  <script src="Chart.min.js"></script>
+  <script src="idb_store.js"></script>
+
+  <script src="visualization.js" defer></script>
 </head>
+
 <body>
   <div class="dashboard-wrapper">
     <header class="dashboard-header">
       <div class="header-text">
-        <h1>Label Intelligence</h1>
-        <p>Real-time inbox patterns and neural categorization.</p>
+        <h1>Dashboard HushInMosiac</h1>
+        <p>Real-time inbox patterns and email categorization.</p>
       </div>
       <div class="search-container wide-search">
         <span class="search-icon">🔍</span>
@@ -31,11 +36,11 @@
       <!-- Stats injected via JS -->
       <div class="stat-card">
         <div class="stat-value">...</div>
-        <div class="stat-label">Neural Mapped Emails</div>
+        <div class="stat-label">Analyzed Emails</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">...</div>
-        <div class="stat-label">Unclassified Queue</div>
+        <div class="stat-label">Pending Review</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">...</div>
@@ -48,8 +53,8 @@
         <div class="card">
           <div class="card-header">
             <div>
-              <h2>Neural Intelligence Cluster</h2>
-              <p>Topological grouping of behavioral email patterns.</p>
+              <h2>Intelligence Cluster</h2>
+              <p>Grouping email patterns.</p>
             </div>
           </div>
           <div id="clusterLegend" class="cluster-legend"></div>
@@ -62,7 +67,7 @@
           <div class="card-header">
             <div>
               <h2>Category Distribution</h2>
-              <p>Relative density of classified email neurons.</p>
+              <p>Relative density of classified emails.</p>
             </div>
           </div>
           <div class="canvas-wrapper">
@@ -70,12 +75,12 @@
           </div>
         </div>
       </div>
-      
+
       <div class="card chart-spacing">
         <div class="card-header">
           <div>
-            <h2>Label Velocity Over Time</h2>
-            <p>Temporal activity intensity across focus sectors.</p>
+            <h2>Email Activities Over Time</h2>
+            <p>Temporal activity.</p>
           </div>
         </div>
         <div class="canvas-wrapper">
@@ -131,4 +136,5 @@
     </div>
   </div>
 </body>
+
 </html>

@@ -449,8 +449,104 @@ tr:hover td {
   width: 100%;
 }
 
+/* --- Filter Drawer System --- */
+.filter-toggle-btn {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow);
+}
+
+.filter-toggle-btn:hover {
+  background: var(--bg-deep);
+  border-color: var(--accent-primary);
+  transform: translateY(-1px);
+}
+
+.filter-toggle-btn.active {
+  background: var(--accent-primary);
+  color: white;
+  border-color: var(--accent-primary);
+}
+
+.filter-bar {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out, margin 0.3s ease-out, padding 0.3s ease-out;
+  background: #f8fafc;
+  border-radius: 12px;
+  margin-bottom: 0;
+}
+
+.filter-bar.active {
+  max-height: 100px;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+}
+
+.filter-inputs {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.filter-inputs label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.filter-inputs input[type="date"] {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--text-main);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.filter-inputs input[type="date"]:focus {
+  border-color: var(--accent-primary);
+}
+
+.btn-clear {
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-clear:hover {
+  background: #f1f5f9;
+  color: var(--text-main);
+  border-color: var(--text-dim);
+}
+
 @media (max-width: 1100px) {
   .visual-grid {
     grid-template-columns: 1fr;
+  }
+  .filter-inputs {
+    gap: 1rem;
   }
 }

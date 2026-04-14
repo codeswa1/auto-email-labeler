@@ -153,6 +153,90 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderActivityTable(dataset);
   initSearch(dataset);
 
+  // --- Filter Logic ---
+  const filterState = {
+    cluster: { from: null, to: null },
+    bar: { from: null, to: null },
+    line: { from: null, to: null }
+  };
+
+  const applyFilter = (prefix) => {
+    const fromInput = document.getElementById(`${prefix}DateFrom`);
+    const toInput = document.getElementById(`${prefix}DateTo`);
+    filterState[prefix].from = fromInput.value || null;
+    filterState[prefix].to = toInput.value || null;
+    updateCard(prefix);
+  };
+
+  const clearFilter = (prefix) => {
+    document.getElementById(`${prefix}DateFrom`).value = '';
+    document.getElementById(`${prefix}DateTo`).value = '';
+    filterState[prefix].from = null;
+    filterState[prefix].to = null;
+    updateCard(prefix);
+  };
+
+  const toggleFilter = (prefix) => {
+    const bar = document.getElementById(`${prefix}FilterBar`);
+    const btn = document.getElementById(`${prefix}FilterBtn`);
+    bar.classList.toggle('active');
+    btn.classList.toggle('active');
+  };
+
+  const getFilteredDataset = (prefix) => {
+    const range = filterState[prefix];
+    if (!range.from && !range.to) return dataset;
+    
+    let fromTs = 0;
+    if (range.from) {
+      const [y, m, d] = range.from.split('-').map(Number);
+      fromTs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    }
+
+    let toTs = Infinity;
+    if (range.to) {
+      const [y, m, d] = range.to.split('-').map(Number);
+      toTs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+    }
+    
+    return dataset.filter(d => {
+      const ts = Number(d.timestamp);
+      return ts >= fromTs && ts <= toTs;
+    });
+  };
+
+  const updateCard = (prefix) => {
+    const filtered = getFilteredDataset(prefix);
+    const labels = [...new Set(filtered.map(d => getNormalizedLabel(d)))].sort((a,b) => {
+       if (a === "Unclassified") return 1;
+       if (b === "Unclassified") return -1;
+       return a.localeCompare(b);
+    });
+    
+    const colors = labels.map(l => l === "Unclassified" ? "#94a3b8" : getStableColor(l));
+    const borders = labels.map(l => l === "Unclassified" ? "#64748b" : getStableBorder(l));
+
+    if (prefix === 'cluster') {
+      if (isD3Ready) renderEmailCluster(filtered.map(d => ({ ...d, label: getNormalizedLabel(d) })), labels);
+    } else if (prefix === 'bar') {
+      const counts = {};
+      filtered.forEach(item => { const l = getNormalizedLabel(item); counts[l] = (counts[l] || 0) + 1; });
+      Chart.getChart("barChart")?.destroy();
+      renderBarChart(labels, counts, colors, borders);
+    } else if (prefix === 'line') {
+      Chart.getChart("lineChart")?.destroy();
+      renderLineChart(filtered, labels, colors, borders);
+    }
+  };
+
+  // Setup listeners
+  ['cluster', 'bar', 'line'].forEach(prefix => {
+    document.getElementById(`${prefix}FilterBtn`).addEventListener('click', () => toggleFilter(prefix));
+    document.getElementById(`${prefix}DateFrom`).addEventListener('change', () => applyFilter(prefix));
+    document.getElementById(`${prefix}DateTo`).addEventListener('change', () => applyFilter(prefix));
+    document.getElementById(`${prefix}FilterClear`).addEventListener('click', () => clearFilter(prefix));
+  });
+
 
   // --- Live Update (Optimized) ---
   chrome.runtime.onMessage.addListener((msg) => {
@@ -191,18 +275,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderTopStats(dataset.length - autoSamples, autoSamples, labelsList.filter(l => l !== "Unclassified").length);
       renderActivityTable(dataset, document.getElementById('emailSearch')?.value || '');
       
-      // Update charts if they exist
-      if (isChartReady) {
-        const counts = {};
-        dataset.forEach(item => { const l = getNormalizedLabel(item); counts[l] = (counts[l] || 0) + 1; });
-        const colors = labelsList.map(l => l === "Unclassified" ? "#94a3b8" : getStableColor(l));
-        const borders = labelsList.map(l => l === "Unclassified" ? "#64748b" : getStableBorder(l));
-        
-        // Find existing chart instances and update them
-        Chart.getChart("barChart")?.destroy();
-        Chart.getChart("lineChart")?.destroy();
-        renderBarChart(labelsList, counts, colors, borders);
-        renderLineChart(dataset, labelsList, colors, borders);
+      // Update charts/clusters using their current filters
+      if (isChartReady || isD3Ready) {
+        ['cluster', 'bar', 'line'].forEach(updateCard);
       }
       
     } catch(e) { console.warn("Dynamic update failed", e); }
@@ -263,6 +338,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     try {
+      if (data.length === 0) {
+        container.innerHTML = `<div style="padding:100px; color:var(--text-dim); text-align:center; font-family:var(--font-display); font-weight:600;">No emails found in this date range.</div>`;
+        return;
+      }
       // Density Guard: Only render the latest 5,000 for the simulation to keep Gmail fluid
       const MAX_VISUAL_NODES = 5000;
       const visualData = data.length > MAX_VISUAL_NODES ? data.slice(-MAX_VISUAL_NODES) : data;
@@ -388,6 +467,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof Chart === 'undefined') return;
     
     try {
+      if (labels.length === 0) {
+        const wrapper = document.querySelector('#barChart').parentElement;
+        wrapper.innerHTML = `<canvas id="barChart"></canvas><div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-weight:600;">No data for this range</div>`;
+        return;
+      }
       new Chart(ctx, {
         type: 'bar',
         data: {
@@ -417,6 +501,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const label = getNormalizedLabel(item);
         timeGroups[d][label] = (timeGroups[d][label] || 0) + 1;
       });
+
+      if (Object.keys(timeGroups).length === 0) {
+        const wrapper = document.querySelector('#lineChart').parentElement;
+        wrapper.innerHTML = `<canvas id="lineChart"></canvas><div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-weight:600;">No temporal data for this range</div>`;
+        return;
+      }
 
 
       const sortedDates = Object.keys(timeGroups).sort();

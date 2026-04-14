@@ -56,6 +56,14 @@
               <h2>Intelligence Cluster</h2>
               <p>Grouping email patterns.</p>
             </div>
+            <button class="filter-toggle-btn" id="clusterFilterBtn" title="Filter by date">📅</button>
+          </div>
+          <div id="clusterFilterBar" class="filter-bar">
+            <div class="filter-inputs">
+              <label>From: <input type="date" id="clusterDateFrom"></label>
+              <label>To: <input type="date" id="clusterDateTo"></label>
+              <button class="btn-clear" id="clusterFilterClear">Reset</button>
+            </div>
           </div>
           <div id="clusterLegend" class="cluster-legend"></div>
           <div id="clusterContainer" class="cluster-container">
@@ -69,6 +77,14 @@
               <h2>Category Distribution</h2>
               <p>Relative density of classified emails.</p>
             </div>
+            <button class="filter-toggle-btn" id="barFilterBtn" title="Filter by date">📅</button>
+          </div>
+          <div id="barFilterBar" class="filter-bar">
+            <div class="filter-inputs">
+              <label>From: <input type="date" id="barDateFrom"></label>
+              <label>To: <input type="date" id="barDateTo"></label>
+              <button class="btn-clear" id="barFilterClear">Reset</button>
+            </div>
           </div>
           <div class="canvas-wrapper">
             <canvas id="barChart"></canvas>
@@ -81,6 +97,14 @@
           <div>
             <h2>Email Activities Over Time</h2>
             <p>Temporal activity.</p>
+          </div>
+          <button class="filter-toggle-btn" id="lineFilterBtn" title="Filter by date">📅</button>
+        </div>
+        <div id="lineFilterBar" class="filter-bar">
+          <div class="filter-inputs">
+            <label>From: <input type="date" id="lineDateFrom"></label>
+            <label>To: <input type="date" id="lineDateTo"></label>
+            <button class="btn-clear" id="lineFilterClear">Reset</button>
           </div>
         </div>
         <div class="canvas-wrapper">
